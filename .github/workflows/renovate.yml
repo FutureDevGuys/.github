@@ -1,0 +1,190 @@
+name: Renovate
+
+concurrency:
+  group: renovate-${{ github.repository }}
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      repoCache:
+        description: "Repository cache mode"
+        type: choice
+        default: enabled
+        options:
+          - enabled
+          - disabled
+          - reset
+      logLevel:
+        description: "Renovate log level"
+        type: choice
+        default: info
+        options:
+          - info
+          - debug
+      validateCreds:
+        description: "Validate credentials before running Renovate"
+        type: boolean
+        default: true
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  cache_archive: renovate_repo_cache.tar.gz
+  cache_dir: /tmp/renovate/cache/renovate/repository
+  cache_key: renovate-repo-cache
+  renovate_org: FutureDevGuys
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+
+    env:
+      RENOVATE_AUTODISCOVER: "true"
+      RENOVATE_AUTODISCOVER_FILTER: FutureDevGuys/*
+
+    steps:
+      - name: Checkout (optional for Renovate)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Preflight - Validate GitHub token (RENOVATE_TOKEN)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.validateCreds == 'true' }}
+        shell: bash
+        env:
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RENOVATE_TOKEN:-}" ]; then
+            echo "ERROR: secrets.RENOVATE_TOKEN is missing/empty."
+            exit 1
+          fi
+
+          user_code="$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${RENOVATE_TOKEN}" \
+            https://api.github.com/user)"
+
+          if [ "${user_code}" != "200" ]; then
+            echo "ERROR: RENOVATE_TOKEN failed /user check (HTTP ${user_code})."
+            exit 1
+          fi
+
+          command -v gh >/dev/null 2>&1 || { echo "ERROR: gh is required for repo autodiscovery preflight."; exit 1; }
+          command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required for repo autodiscovery preflight."; exit 1; }
+
+          org="${RENOVATE_AUTODISCOVER_ORG:-${{ env.renovate_org }}}"
+          repos="$(
+            GH_TOKEN="${RENOVATE_TOKEN}" gh api "orgs/${org}/repos?per_page=100&type=all" --paginate \
+              --jq '.[] | select(.archived == false) | .full_name'
+          )"
+
+          if [ -z "${repos}" ]; then
+            echo "ERROR: No accessible repositories discovered in org ${org}."
+            exit 1
+          fi
+
+          echo "OK: RENOVATE_TOKEN can enumerate org repos for autodiscovery."
+
+      - name: Preflight - Validate Docker Hub login (optional)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.validateCreds == 'true' }}
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DOCKERHUB_USERNAME:-}" ] && [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "Docker Hub secrets not set; skipping Docker Hub auth check."
+            exit 0
+          fi
+          if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "ERROR: Docker Hub auth is partially configured. Provide BOTH DOCKERHUB_USERNAME and DOCKERHUB_TOKEN."
+            exit 1
+          fi
+
+          printf '%s' "${DOCKERHUB_TOKEN}" | docker login --username "${DOCKERHUB_USERNAME}" --password-stdin
+
+      - name: Preflight - Validate GHCR login (optional)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.validateCreds == 'true' }}
+        shell: bash
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GHCR_USERNAME:-}" ] && [ -z "${GHCR_TOKEN:-}" ]; then
+            echo "GHCR secrets not set; skipping GHCR auth check."
+            exit 0
+          fi
+
+          if [ -z "${GHCR_USERNAME:-}" ] || [ -z "${GHCR_TOKEN:-}" ]; then
+            echo "ERROR: GHCR auth is partially configured. Provide BOTH GHCR_USERNAME and GHCR_TOKEN."
+            exit 1
+          fi
+
+          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+
+      - name: Download previous Renovate repo cache artifact
+        if: ${{ (github.event.inputs.repoCache || 'enabled') == 'enabled' }}
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@09b07ec687d10771279a426c79925ee415c12906 # v17
+        with:
+          name: ${{ env.cache_key }}
+          path: cache-download
+
+      - name: Restore Renovate repo cache
+        if: ${{ (github.event.inputs.repoCache || 'enabled') == 'enabled' }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ ! -d cache-download ]; then
+            echo "No cache found."
+            exit 0
+          fi
+          mkdir -p "${cache_dir}"
+          tar -xzf "cache-download/${cache_archive}" -C "${cache_dir}" || true
+          sudo chown -R 12021:0 /tmp/renovate/ || true
+
+      - name: Self-hosted Renovate (GitHub Action)
+        uses: renovatebot/github-action@0b17c4eb901eca44d018fb25744a50a74b2042df # v46.1.4
+        with:
+          configurationFile: .github/renovate-config.js
+          token: ${{ secrets.RENOVATE_TOKEN }}
+          env-regex: "^(?:RENOVATE_\\w+|DOCKERHUB_\\w+|GHCR_\\w+|LOG_LEVEL)$"
+        env:
+          LOG_LEVEL: ${{ github.event.inputs.logLevel || 'info' }}
+          RENOVATE_CACHE_DIR: /tmp/renovate/cache
+          RENOVATE_REPOSITORY_CACHE: ${{ github.event.inputs.repoCache || 'enabled' }}
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          RENOVATE_AUTODISCOVER: "true"
+          RENOVATE_AUTODISCOVER_FILTER: ${{ env.renovate_org }}/*
+          RENOVATE_AUTODISCOVER_ORG: ${{ env.renovate_org }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Compress Renovate repo cache
+        if: ${{ (github.event.inputs.repoCache || 'enabled') != 'disabled' }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ -d "${cache_dir}" ]; then
+            tar -czf "${cache_archive}" -C "${cache_dir}" .
+          else
+            echo "Repo cache dir not found; skipping."
+            exit 0
+          fi
+
+      - name: Upload Renovate repo cache artifact
+        if: ${{ (github.event.inputs.repoCache || 'enabled') != 'disabled' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: ${{ env.cache_key }}
+          path: ${{ env.cache_archive }}
+          retention-days: 7
