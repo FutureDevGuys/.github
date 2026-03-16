@@ -1,0 +1,275 @@
+name: Automerge
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Single repo to sweep (owner/name). Leave empty for org-wide."
+        required: false
+        type: string
+      dry_run:
+        description: "Dry run (report only)"
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    # 30 min after Renovate runs (Renovate: "0 */6 * * *")
+    - cron: "30 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: automerge
+  cancel-in-progress: false
+
+env:
+  ORG: FutureDevGuys
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Automerge sweep
+        env:
+          GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+
+          # Inputs (empty on schedule)
+          INPUT_REPO: ${{ inputs.repo }}
+          DRY_RUN: ${{ inputs.dry_run }}
+
+          # Defaults (hardcoded — no callers to override)
+          TARGET_BRANCH: main
+          ALLOWED_PREFIXES: "renovate/"
+          BLOCK_LABELS: "do-not-merge"
+          RENOVATE_AUTOMERGE_ONLY: "true"
+          MERGE_METHOD: squash
+          DELETE_BRANCH: "true"
+
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # ---- tooling checks ----
+          command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI not found on runner"; exit 1; }
+          command -v jq >/dev/null 2>&1 || { echo "ERROR: jq not found on runner"; exit 1; }
+
+          # ---- scheduled runs merge for real; manual defaults to dry_run=true ----
+          DRY_RUN="${DRY_RUN:-false}"
+
+          # Basic validation for merge method
+          case "${MERGE_METHOD}" in
+            merge|squash|rebase) ;;
+            *)
+              echo "ERROR: MERGE_METHOD must be one of: merge | squash | rebase (got '${MERGE_METHOD}')"
+              exit 1
+              ;;
+          esac
+
+          # ---- enumerate repos ----
+          if [ -n "${INPUT_REPO:-}" ]; then
+            repos="${INPUT_REPO}"
+            echo "Single-repo mode: ${repos}"
+          else
+            echo "Enumerating non-archived repos in ${ORG}…"
+            repos="$(gh api "orgs/${ORG}/repos?per_page=100&type=all" \
+              --paginate --jq '.[] | select(.archived == false) | .full_name')"
+
+            if [ -z "${repos}" ]; then
+              echo "ERROR: No accessible repositories found in org ${ORG}."
+              exit 1
+            fi
+            echo "Repos discovered:"
+            while IFS= read -r r; do echo "  ${r}"; done <<< "${repos}"
+          fi
+
+          echo ""
+          echo "Automerge sweep"
+          echo "  target_branch=${TARGET_BRANCH}"
+          echo "  allowed_prefixes='${ALLOWED_PREFIXES}'"
+          echo "  block_labels='${BLOCK_LABELS}'"
+          echo "  renovate_automerge_only=${RENOVATE_AUTOMERGE_ONLY}"
+          echo "  merge_method=${MERGE_METHOD}"
+          echo "  delete_branch=${DELETE_BRANCH}"
+          echo "  dry_run=${DRY_RUN}"
+          echo ""
+
+          total_merged=0
+          total_skipped=0
+          total_dry=0
+
+          for REPO in ${repos}; do
+            echo "==== ${REPO} ===="
+
+            pr_numbers=()
+
+            echo "Listing open PRs…"
+            candidates_raw="$(
+              gh pr list --repo "${REPO}" --state open --limit 200 \
+                --json number,headRefName,baseRefName,isDraft \
+                --jq '.[] | select(.isDraft == false) | "\(.number)\t\(.headRefName)\t\(.baseRefName)"'
+            )" || {
+              echo "WARNING: gh pr list failed for ${REPO} (auth/permissions?); skipping repo."
+              continue
+            }
+
+            candidates=()
+            if [ -n "${candidates_raw}" ]; then
+              mapfile -t candidates <<< "${candidates_raw}"
+            fi
+
+            for row in "${candidates[@]}"; do
+              num="$(cut -f1 <<<"$row")"
+              head="$(cut -f2 <<<"$row")"
+              base="$(cut -f3 <<<"$row")"
+
+              [ "$base" = "$TARGET_BRANCH" ] || continue
+
+              allowed="false"
+              for p in ${ALLOWED_PREFIXES}; do
+                if [[ "$head" == "${p}"* ]]; then
+                  allowed="true"
+                  break
+                fi
+              done
+              [ "$allowed" = "true" ] || continue
+
+              pr_numbers+=("$num")
+            done
+
+            if [ "${#pr_numbers[@]}" -eq 0 ]; then
+              echo "No candidate PRs."
+              echo ""
+              continue
+            fi
+
+            echo "Candidate PRs: ${pr_numbers[*]}"
+
+            for pr in "${pr_numbers[@]}"; do
+              echo ""
+              echo "----"
+              echo "Processing ${REPO}#${pr}"
+
+              pr_json="$(gh pr view --repo "${REPO}" "${pr}" \
+                --json number,state,isDraft,baseRefName,headRefName,title,body,labels,mergeStateStatus,mergeable
+              )"
+
+              state="$(jq -r '.state' <<< "${pr_json}")"
+              draft="$(jq -r '.isDraft' <<< "${pr_json}")"
+              base="$(jq -r '.baseRefName' <<< "${pr_json}")"
+              head="$(jq -r '.headRefName' <<< "${pr_json}")"
+              title="$(jq -r '.title' <<< "${pr_json}")"
+              body="$(jq -r '.body // ""' <<< "${pr_json}")"
+              labels_csv="$(jq -r '[.labels[].name] | join(",")' <<< "${pr_json}")"
+              merge_state="$(jq -r '.mergeStateStatus' <<< "${pr_json}")"
+              mergeable="$(jq -r '.mergeable' <<< "${pr_json}")"
+
+              echo "PR: ${title}"
+              echo "state=${state} draft=${draft} base=${base} head=${head} labels=${labels_csv} mergeStateStatus=${merge_state} mergeable=${mergeable}"
+
+              # Basic gates
+              [ "${state}" = "OPEN" ] || { echo "Not open; skipping."; total_skipped=$((total_skipped+1)); continue; }
+              [ "${draft}" != "true" ] || { echo "Draft; skipping."; total_skipped=$((total_skipped+1)); continue; }
+              [ "${base}" = "${TARGET_BRANCH}" ] || { echo "Targets '${base}', not '${TARGET_BRANCH}'; skipping."; total_skipped=$((total_skipped+1)); continue; }
+
+              # Head prefix allowlist (re-check here for single-PR runs too)
+              allowed="false"
+              for p in ${ALLOWED_PREFIXES}; do
+                if [[ "${head}" == "${p}"* ]]; then
+                  allowed="true"
+                  break
+                fi
+              done
+              if [ "${allowed}" != "true" ]; then
+                echo "Head branch '${head}' does not match allowed prefixes; skipping."
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+
+              # Block labels
+              IFS=',' read -r -a blocked <<< "${BLOCK_LABELS}"
+              skip_blocked="false"
+              for bl in "${blocked[@]}"; do
+                bl_trim="$(echo "${bl}" | xargs)"
+                if [ -n "${bl_trim}" ] && echo ",${labels_csv}," | grep -qi ",${bl_trim},"; then
+                  echo "Blocked by label '${bl_trim}'; skipping."
+                  skip_blocked="true"
+                  break
+                fi
+              done
+              if [ "${skip_blocked}" = "true" ]; then
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+
+              # Renovate-specific gating
+              if [ "${RENOVATE_AUTOMERGE_ONLY}" = "true" ] && [[ "${head}" == renovate/* ]]; then
+                if ! echo "${body}" | grep -Eqi 'Automerge\*\*?:?\s*Enabled|Automerge:\s*Enabled'; then
+                  echo "Renovate automerge not explicitly enabled in PR body; skipping."
+                  total_skipped=$((total_skipped+1))
+                  continue
+                fi
+                echo "Renovate PR indicates automerge enabled."
+              fi
+
+              # GitHub may return mergeable=UNKNOWN temporarily; retry a few times
+              if [ "${mergeable}" = "UNKNOWN" ]; then
+                for i in 1 2 3; do
+                  echo "mergeable=UNKNOWN; refreshing (${i}/3)…"
+                  sleep 2
+                  pr_json="$(gh pr view --repo "${REPO}" "${pr}" \
+                    --json mergeStateStatus,mergeable
+                  )"
+                  merge_state="$(jq -r '.mergeStateStatus' <<< "${pr_json}")"
+                  mergeable="$(jq -r '.mergeable' <<< "${pr_json}")"
+                  echo "refresh: mergeStateStatus=${merge_state} mergeable=${mergeable}"
+                  [ "${mergeable}" != "UNKNOWN" ] && break
+                done
+              fi
+
+              # Only merge when GitHub says it's ready
+              if [ "${mergeable}" != "MERGEABLE" ]; then
+                echo "Not mergeable yet (mergeable=${mergeable}); skipping."
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              if [ "${merge_state}" != "CLEAN" ] && [ "${merge_state}" != "HAS_HOOKS" ]; then
+                if [ "${merge_state}" = "UNSTABLE" ]; then
+                  echo "Merge state is UNSTABLE (usually failing checks). Required checks for ${REPO}#${pr}:"
+                  gh pr checks --repo "${REPO}" "${pr}" --required || true
+                fi
+                echo "Not merge-ready (mergeStateStatus=${merge_state}); skipping."
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+
+              if [ "${DRY_RUN}" = "true" ]; then
+                echo "DRY RUN: would merge ${REPO}#${pr} now."
+                total_dry=$((total_dry+1))
+                continue
+              fi
+
+              merge_args=(--"${MERGE_METHOD}")
+              if [ "${DELETE_BRANCH}" = "true" ]; then
+                merge_args+=(--delete-branch)
+              fi
+
+              echo "Attempting merge: gh pr merge --repo ${REPO} ${pr} ${merge_args[*]}"
+              if gh pr merge --repo "${REPO}" "${pr}" "${merge_args[@]}"; then
+                echo "Merge complete."
+                total_merged=$((total_merged+1))
+              else
+                echo "Merge failed (likely blocked by protections/checks). Current required checks:"
+                gh pr checks --repo "${REPO}" "${pr}" --required || true
+                echo "Will retry on next sweep."
+                total_skipped=$((total_skipped+1))
+              fi
+            done
+
+            echo ""
+          done
+
+          echo "==== Summary ===="
+          echo "  merged=${total_merged}"
+          echo "  skipped=${total_skipped}"
+          echo "  dry_run_eligible=${total_dry}"
