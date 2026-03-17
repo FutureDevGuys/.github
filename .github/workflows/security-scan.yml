@@ -1,0 +1,118 @@
+name: security-scan
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: trivy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      IS_DEPENDENCY_BOT_PR: >-
+        ${{
+          github.event_name == 'pull_request' && (
+            github.actor == 'renovate[bot]' ||
+            github.actor == 'dependabot[bot]' ||
+            startsWith(github.head_ref, 'renovate/') ||
+            startsWith(github.head_ref, 'dependabot/')
+          )
+        }}
+    steps:
+      - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+
+      - name: Skip on dependency bot PRs
+        if: env.IS_DEPENDENCY_BOT_PR == 'true'
+        run: echo "Skipping Trivy scan for dependency bot PR; keeping check green."
+
+      - name: Resolve Trivy config
+        id: trivyconfig
+        if: env.IS_DEPENDENCY_BOT_PR != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f trivy.yaml ]]; then
+            echo "path=trivy.yaml" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat > .trivy-default.yaml <<'TRIVYEOF'
+          severity:
+            - HIGH
+            - CRITICAL
+          ignore-unfixed: true
+          scanners:
+            - vuln
+            - misconfig
+            - secret
+            - license
+          TRIVYEOF
+          sed -i 's/^          //' .trivy-default.yaml
+          echo "path=.trivy-default.yaml" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Trivy ignore file
+        id: trivyignore
+        if: env.IS_DEPENDENCY_BOT_PR != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f .trivyignore.yaml ]]; then
+            echo "path=.trivyignore.yaml" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          : > .trivyignore.empty.yaml
+          echo "path=.trivyignore.empty.yaml" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy repo scan (JSON, enforce)
+        id: trivy_scan
+        if: env.IS_DEPENDENCY_BOT_PR != 'true'
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        with:
+          scan-type: fs
+          scan-ref: .
+          trivy-config: ${{ steps.trivyconfig.outputs.path }}
+          trivyignores: ${{ steps.trivyignore.outputs.path }}
+          format: json
+          output: trivy-results.json
+          exit-code: "1"
+
+      - name: Attach report artifact
+        if: ${{ always() && env.IS_DEPENDENCY_BOT_PR != 'true' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: trivy-results
+          path: trivy-results.json
+          if-no-files-found: warn
+
+      - name: Add summary
+        if: ${{ always() && github.event_name == 'pull_request' && env.IS_DEPENDENCY_BOT_PR != 'true' }}
+        shell: bash
+        run: |
+          echo "## Trivy summary" >> "$GITHUB_STEP_SUMMARY"
+          if [[ ! -f trivy-results.json ]]; then
+            echo "_No trivy-results.json produced by scan step._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '
+              def allV: [ .Results[]? | .Vulnerabilities? // [] ] | add // [];
+              def allM: [ .Results[]? | .Misconfigurations? // [] ] | add // [];
+              "Vulnerabilities: HIGH=\( (allV | map(select(.Severity=="HIGH")) | length) ), " +
+              "CRITICAL=\( (allV | map(select(.Severity=="CRITICAL")) | length) )",
+              "Misconfigurations: HIGH=\( (allM | map(select(.Severity=="HIGH")) | length) ), " +
+              "CRITICAL=\( (allM | map(select(.Severity=="CRITICAL")) | length) )"
+            ' trivy-results.json >> "$GITHUB_STEP_SUMMARY" || echo "No JSON results." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_jq not available on runner_" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Enforce Trivy gate
+        if: ${{ env.IS_DEPENDENCY_BOT_PR != 'true' && steps.trivy_scan.outcome == 'failure' }}
+        shell: bash
+        run: |
+          echo "Trivy found HIGH/CRITICAL issues. See artifact and summary for details."
+          exit 1
