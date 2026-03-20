@@ -8,7 +8,8 @@ Trivy filesystem scan — checks for vulnerabilities, misconfigurations, secrets
 
 **Features:**
 - Dependency-bot PR detection (Renovate/Dependabot) — skips scan, keeps check green
-- JSON artifact upload (`trivy-results`)
+- Concurrency cancellation for superseded PR/ref scans
+- JSON artifact upload (`trivy-results`) only on failure or manual dispatch
 - PR step summary with vuln/misconfig counts
 - Gate enforcement — fails the job on HIGH/CRITICAL findings
 - Embedded default `trivy.yaml` — repos without one get the org standard automatically
@@ -24,8 +25,6 @@ on:
   workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  schedule:
-    - cron: "0 7 * * 0"
 
 permissions:
   contents: read
@@ -47,7 +46,7 @@ Replace `<SHA>` with the current commit SHA of the `.github` repo's main branch.
 
 - **Scan settings:** Override by placing a `trivy.yaml` in your repo root. The reusable workflow checks for it first; if absent, it writes the org default (HIGH+CRITICAL, ignore-unfixed, vuln/misconfig/secret/license scanners).
 - **Suppressions:** Add `.trivyignore.yaml` with documented exceptions. Include `expired_at` dates.
-- **Triggers:** Owned by the caller workflow. Add/remove `push`, `schedule`, `workflow_dispatch` as needed.
+- **Triggers:** Owned by the caller workflow. The default caller should keep `pull_request` + `workflow_dispatch` only. Add extra triggers only as an explicit repo override.
 
 ## SHA Pinning and Renovate
 
