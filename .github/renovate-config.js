@@ -48,6 +48,18 @@ module.exports = {
   prConcurrentLimit: 12,
   prHourlyLimit: 6,
 
+  customManagers: [
+    {
+      customType: 'regex',
+      description:
+        'Track any # renovate: annotated version pin in YAML files across the org.',
+      managerFilePatterns: ['**/*.yml', '**/*.yaml'],
+      matchStrings: [
+        '#\\s*renovate:\\s*datasource=(?<datasource>[^\\s]+)\\s+depName=(?<depName>[^\\n]+)\\n[a-z_]+_version:\\s*["\']?(?<currentValue>[^"\'\\s\\n]+)',
+      ],
+    },
+  ],
+
   packageRules: [
     {
       matchFileNames: ['archived/**', '**/archived/**'],
