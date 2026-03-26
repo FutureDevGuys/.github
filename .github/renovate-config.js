@@ -52,10 +52,12 @@ module.exports = {
     {
       customType: 'regex',
       description:
-        'Track any # renovate: annotated version pin in YAML files across the org.',
+        'Track any # renovate: annotated version pin in YAML files across the org. '
+        + 'Supports lowercase keys (Ansible defaults), uppercase keys (docker-compose '
+        + 'build args), shell ${VAR:-default} values, and optional versioning= directive.',
       managerFilePatterns: ['**/*.yml', '**/*.yaml'],
       matchStrings: [
-        '#\\s*renovate:\\s*datasource=(?<datasource>[^\\s]+)\\s+depName=(?<depName>[^\\n]+)\\n[a-z_]+_version:\\s*["\']?(?<currentValue>[^"\'\\s\\n]+)',
+        '#\\s*renovate:\\s*datasource=(?<datasource>[^\\s]+)\\s+depName=(?<depName>[^\\s]+)(?:\\s+versioning=(?<versioning>[^\\s\\n]+))?\\n\\s*\\w+_(?:version|VERSION):\\s*(?:\\$\\{[^:}]+:-)?["\']?(?<currentValue>[^"\'\\s\\n}]+)',
       ],
     },
   ],
