@@ -32,6 +32,13 @@ permissions:
 jobs:
   trivy:
     uses: FutureDevGuys/.github/.github/workflows/security-scan.yml@<SHA>
+    with:
+      is_dependency_bot_pr: ${{ github.event_name == 'pull_request' && (
+        github.actor == 'renovate[bot]' ||
+        github.actor == 'dependabot[bot]' ||
+        startsWith(github.head_ref, 'renovate/') ||
+        startsWith(github.head_ref, 'dependabot/')
+      ) }}
     permissions:
       contents: read
 ```
@@ -58,6 +65,6 @@ Edit in this repo (`.github`) → push to main → all callers receive Renovate 
 
 ## Design Decisions
 
-- **`workflow_call` trigger:** Inherits the caller's event context (`github.event_name`, `github.actor`, `github.head_ref`), so dependency-bot detection works without passing inputs. `actions/checkout` checks out the caller's repo, so per-repo config files resolve correctly.
-- **Embedded defaults:** Zero-config onboarding — new repos don't need to copy `trivy.yaml`.
-- **No inputs:** All repos use the same settings today. Inputs can be added later if divergence is needed (YAGNI).
+- **`workflow_call` trigger:** The reusable workflow receives a caller-provided `is_dependency_bot_pr` input instead of trying to infer Renovate/Dependabot state from callee context. `actions/checkout` checks out the caller's repo, so per-repo config files resolve correctly.
+- **Embedded defaults:** Zero-config onboarding - new repos don't need to copy `trivy.yaml`.
+- **Single boolean input:** The dependency-bot skip is computed in the caller workflow where `pull_request` context exists, then passed through to the shared workflow for consistent enforcement.

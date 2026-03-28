@@ -2,6 +2,12 @@ name: security-scan
 
 on:
   workflow_call:
+    inputs:
+      is_dependency_bot_pr:
+        description: Whether the caller detected a Renovate/Dependabot PR.
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -18,15 +24,7 @@ jobs:
     permissions:
       contents: read
     env:
-      IS_DEPENDENCY_BOT_PR: >-
-        ${{
-          github.actor == 'renovate[bot]' ||
-          github.actor == 'dependabot[bot]' ||
-          github.event.pull_request.user.login == 'renovate[bot]' ||
-          github.event.pull_request.user.login == 'dependabot[bot]' ||
-          startsWith(github.event.pull_request.head.ref || '', 'renovate/') ||
-          startsWith(github.event.pull_request.head.ref || '', 'dependabot/')
-        }}
+      IS_DEPENDENCY_BOT_PR: ${{ inputs.is_dependency_bot_pr }}
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
 
