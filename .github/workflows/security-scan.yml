@@ -20,12 +20,12 @@ jobs:
     env:
       IS_DEPENDENCY_BOT_PR: >-
         ${{
-          github.event_name == 'pull_request' && (
-            github.actor == 'renovate[bot]' ||
-            github.actor == 'dependabot[bot]' ||
-            startsWith(github.head_ref, 'renovate/') ||
-            startsWith(github.head_ref, 'dependabot/')
-          )
+          github.actor == 'renovate[bot]' ||
+          github.actor == 'dependabot[bot]' ||
+          github.event.pull_request.user.login == 'renovate[bot]' ||
+          github.event.pull_request.user.login == 'dependabot[bot]' ||
+          startsWith(github.event.pull_request.head.ref || '', 'renovate/') ||
+          startsWith(github.event.pull_request.head.ref || '', 'dependabot/')
         }}
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
@@ -86,7 +86,7 @@ jobs:
           exit-code: "1"
 
       - name: Attach report artifact
-        if: ${{ always() && env.IS_DEPENDENCY_BOT_PR != 'true' && (github.event_name == 'workflow_dispatch' || steps.trivy_scan.outcome == 'failure') }}
+        if: ${{ always() && env.IS_DEPENDENCY_BOT_PR != 'true' && steps.trivy_scan.outcome == 'failure' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: trivy-results
@@ -94,7 +94,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Add summary
-        if: ${{ always() && github.event_name == 'pull_request' && env.IS_DEPENDENCY_BOT_PR != 'true' }}
+        if: ${{ always() && env.IS_DEPENDENCY_BOT_PR != 'true' && steps.trivy_scan.outcome != '' }}
         shell: bash
         run: |
           echo "## Trivy summary" >> "$GITHUB_STEP_SUMMARY"
