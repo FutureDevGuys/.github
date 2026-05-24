@@ -26,6 +26,29 @@ on:
         description: "Validate credentials before running Renovate"
         type: boolean
         default: true
+      repositories:
+        description: "Comma-separated owner/repo list. Overrides autodiscovery when set."
+        required: false
+        type: string
+        default: ""
+      autodiscoverFilter:
+        description: "Autodiscovery filter used when repositories is empty"
+        required: false
+        type: string
+        default: "FutureDevGuys/*"
+      dryRun:
+        description: "Renovate dry-run mode"
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - lookup
+          - full
+      configPreset:
+        description: "Shared preset consumed by the runtime config"
+        required: false
+        type: string
+        default: "local>FutureDevGuys/.github:renovate-config"
   schedule:
     - cron: "0 */6 * * *"
 
@@ -44,8 +67,11 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      RENOVATE_AUTODISCOVER: "true"
-      RENOVATE_AUTODISCOVER_FILTER: FutureDevGuys/*
+      RENOVATE_AUTODISCOVER: ${{ (github.event_name != 'workflow_dispatch' || inputs.repositories == '') && 'true' || 'false' }}
+      RENOVATE_AUTODISCOVER_FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.autodiscoverFilter || 'FutureDevGuys/*' }}
+      RENOVATE_REPOSITORIES: ${{ github.event_name == 'workflow_dispatch' && inputs.repositories || '' }}
+      RENOVATE_CONFIG_PRESET: ${{ github.event_name == 'workflow_dispatch' && inputs.configPreset || 'local>FutureDevGuys/.github:renovate-config' }}
+      RENOVATE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dryRun != 'off' && inputs.dryRun || '' }}
 
     steps:
       - name: Checkout (optional for Renovate)
@@ -76,18 +102,27 @@ jobs:
           command -v gh >/dev/null 2>&1 || { echo "ERROR: gh is required for repo autodiscovery preflight."; exit 1; }
           command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required for repo autodiscovery preflight."; exit 1; }
 
-          org="${RENOVATE_AUTODISCOVER_ORG:-${{ env.renovate_org }}}"
-          repos="$(
-            GH_TOKEN="${RENOVATE_TOKEN}" gh api "orgs/${org}/repos?per_page=100&type=all" --paginate \
-              --jq '.[] | select(.archived == false) | .full_name'
-          )"
+          if [ -n "${RENOVATE_REPOSITORIES:-}" ]; then
+            echo "Explicit repository mode:"
+            tr ',' '\n' <<< "${RENOVATE_REPOSITORIES}" | while IFS= read -r repo; do
+              repo="$(xargs <<< "${repo}")"
+              [ -n "${repo}" ] || continue
+              GH_TOKEN="${RENOVATE_TOKEN}" gh repo view "${repo}" --json nameWithOwner --jq '.nameWithOwner' >/dev/null
+              echo "  ${repo}"
+            done
+          else
+            org="${RENOVATE_AUTODISCOVER_ORG:-${{ env.renovate_org }}}"
+            repos="$(
+              GH_TOKEN="${RENOVATE_TOKEN}" gh api "orgs/${org}/repos?per_page=100&type=all" --paginate \
+                --jq '.[] | select(.archived == false) | .full_name'
+            )"
 
-          if [ -z "${repos}" ]; then
-            echo "ERROR: No accessible repositories discovered in org ${org}."
-            exit 1
+            if [ -z "${repos}" ]; then
+              echo "ERROR: No accessible repositories discovered in org ${org}."
+              exit 1
+            fi
+            echo "OK: RENOVATE_TOKEN can enumerate org repos for autodiscovery."
           fi
-
-          echo "OK: RENOVATE_TOKEN can enumerate org repos for autodiscovery."
 
       - name: Preflight - Validate Docker Hub login (optional)
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.validateCreds == 'true' }}
@@ -161,9 +196,12 @@ jobs:
           RENOVATE_CACHE_DIR: /tmp/renovate/cache
           RENOVATE_REPOSITORY_CACHE: ${{ github.event.inputs.repoCache || 'enabled' }}
           RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
-          RENOVATE_AUTODISCOVER: "true"
-          RENOVATE_AUTODISCOVER_FILTER: ${{ env.renovate_org }}/*
+          RENOVATE_AUTODISCOVER: ${{ env.RENOVATE_AUTODISCOVER }}
+          RENOVATE_AUTODISCOVER_FILTER: ${{ env.RENOVATE_AUTODISCOVER_FILTER }}
           RENOVATE_AUTODISCOVER_ORG: ${{ env.renovate_org }}
+          RENOVATE_REPOSITORIES: ${{ env.RENOVATE_REPOSITORIES }}
+          RENOVATE_CONFIG_PRESET: ${{ env.RENOVATE_CONFIG_PRESET }}
+          RENOVATE_DRY_RUN: ${{ env.RENOVATE_DRY_RUN }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}

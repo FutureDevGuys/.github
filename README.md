@@ -4,16 +4,25 @@ This repository is the shared automation home for `FutureDevGuys`.
 
 ## Renovate
 
-- Shared baseline: `.github/renovate-config.js`
-- Scheduled runtime: `.github/workflows/renovate.yml`
+- Shared preset: `.github/renovate-config.json`
+- Scheduled runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
 - Scope: org autodiscovery for `FutureDevGuys/*`
 
 Repo-specific policy remains in each repository's own `renovate.json` (e.g.
 Docker image review rules, version pin managers, submodule pointer policy).
 
+Internal `FutureDevGuys` repos are covered by the central runner and normally
+do not need a local Renovate config. External consumers can opt in with:
+
+```json
+{
+  "extends": ["github>FutureDevGuys/.github:renovate-config"]
+}
+```
+
 ### Version pin annotations
 
-The shared baseline includes a generic regex manager that tracks
+The shared preset includes a generic regex manager that tracks
 `# renovate:` comment annotations in any YAML file across the org.
 To pin a version and let Renovate auto-bump it, add this pattern:
 
@@ -26,8 +35,8 @@ The variable must end with `_version` and the value must be quoted.
 Supported `datasource` values include `github-releases`, `github-tags`,
 `pypi`, `npm`, etc. — see [Renovate datasources](https://docs.renovatebot.com/modules/datasource/).
 
-No per-repo `renovate.json` change is needed to use this — the org
-baseline picks it up automatically.
+No per-repo `renovate.json` change is needed inside `FutureDevGuys` to use
+this — the org preset picks it up automatically.
 
 ## Required Actions secrets
 
@@ -35,5 +44,5 @@ baseline picks it up automatically.
 - `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` when private Docker Hub access is needed
 - `GHCR_USERNAME` and `GHCR_TOKEN` when private GHCR access is needed
 
-An optional manual Docker runner can fetch this repo at runtime so there is
-only one checked-in shared Renovate baseline.
+An optional portable Docker runner can extend this preset at runtime. It should
+default to explicit repositories, not broad token autodiscovery.

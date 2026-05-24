@@ -1,0 +1,96 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "FutureDevGuys shared Renovate preset for low-maintenance, label-driven dependency updates.",
+  "extends": [
+    "config:recommended",
+    ":label(renovate)",
+    ":semanticCommits",
+    ":configMigration",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests",
+    "mergeConfidence:all-badges"
+  ],
+  "dockerMaxPages": 3,
+  "platformAutomerge": false,
+  "rebaseWhen": "behind-base-branch",
+  "dependencyDashboard": true,
+  "ignorePaths": ["archived/**", "**/archived/**"],
+  "prConcurrentLimit": 12,
+  "prHourlyLimit": 6,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track any # renovate: annotated version pin in YAML files.",
+      "managerFilePatterns": ["**/*.yml", "**/*.yaml"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>[^\\s]+)\\s+depName=(?<depName>[^\\s]+)(?:\\s+versioning=(?<versioning>[^\\s\\n]+))?\\n\\s*\\w+_(?:version|VERSION):\\s*(?:\\$\\{[^:}]+:-)?[\"']?(?<currentValue>[^\"'\\s\\n}]+)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "matchFileNames": ["archived/**", "**/archived/**"],
+      "enabled": false
+    },
+    {
+      "description": "Keep major updates manual and label them for shared automerge sweep exclusion.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "dependencyDashboardApproval": true,
+      "addLabels": ["manual-review", "major"]
+    },
+    {
+      "description": "Automerge ordinary non-major updates after release age and checks.",
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "minimumReleaseAge": "3 days",
+      "internalChecksFilter": "strict",
+      "addLabels": ["automerge-candidate"]
+    },
+    {
+      "description": "Delay single-segment Docker Hub image updates so namespace resolution can settle.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/^[^.:/]+([/][^/]+)*$/"],
+      "minimumReleaseAge": "3 days",
+      "internalChecksFilter": "strict"
+    },
+    {
+      "description": "Automerge Docker digest refreshes after required checks pass.",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "addLabels": ["automerge-candidate"]
+    },
+    {
+      "description": "Automerge Dockerfile and Docker Compose patch/minor updates after release age and checks.",
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "pr",
+      "minimumReleaseAge": "3 days",
+      "internalChecksFilter": "strict",
+      "addLabels": ["automerge-candidate"]
+    },
+    {
+      "description": "Automerge GitHub Actions routine updates after release age and checks.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "minor", "patch", "pin", "pinDigest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "minimumReleaseAge": "3 days",
+      "internalChecksFilter": "strict",
+      "addLabels": ["automerge-candidate"]
+    },
+    {
+      "description": "Group GitHub Actions patch updates together when their risk class matches.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch"],
+      "groupName": "gha-patches",
+      "automerge": true,
+      "automergeStrategy": "auto",
+      "automergeType": "pr"
+    }
+  ]
+}

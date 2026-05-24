@@ -41,8 +41,8 @@ jobs:
           # Defaults (hardcoded — no callers to override)
           TARGET_BRANCH: main
           ALLOWED_PREFIXES: "renovate/"
-          BLOCK_LABELS: "do-not-merge"
-          RENOVATE_AUTOMERGE_ONLY: "true"
+          REQUIRED_LABELS: "automerge-candidate"
+          BLOCK_LABELS: "do-not-merge,manual-review,migration-required,major"
           MERGE_METHOD: squash
           DELETE_BRANCH: "true"
 
@@ -87,8 +87,8 @@ jobs:
           echo "Automerge sweep"
           echo "  target_branch=${TARGET_BRANCH}"
           echo "  allowed_prefixes='${ALLOWED_PREFIXES}'"
+          echo "  required_labels='${REQUIRED_LABELS}'"
           echo "  block_labels='${BLOCK_LABELS}'"
-          echo "  renovate_automerge_only=${RENOVATE_AUTOMERGE_ONLY}"
           echo "  merge_method=${MERGE_METHOD}"
           echo "  delete_branch=${DELETE_BRANCH}"
           echo "  dry_run=${DRY_RUN}"
@@ -97,6 +97,15 @@ jobs:
           total_merged=0
           total_skipped=0
           total_dry=0
+
+          has_label() {
+            local labels_csv="$1"
+            local wanted="$2"
+            local labels_lc wanted_lc
+            labels_lc="$(tr '[:upper:]' '[:lower:]' <<< ",${labels_csv},")"
+            wanted_lc="$(xargs <<< "${wanted}" | tr '[:upper:]' '[:lower:]')"
+            [ -n "${wanted_lc}" ] && grep -Fq ",${wanted_lc}," <<< "${labels_lc}"
+          }
 
           for REPO in ${repos}; do
             echo "==== ${REPO} ===="
@@ -151,7 +160,7 @@ jobs:
               echo "Processing ${REPO}#${pr}"
 
               pr_json="$(gh pr view --repo "${REPO}" "${pr}" \
-                --json number,state,isDraft,baseRefName,headRefName,title,body,labels,mergeStateStatus,mergeable
+                --json number,state,isDraft,baseRefName,headRefName,title,labels,mergeStateStatus,mergeable
               )"
 
               state="$(jq -r '.state' <<< "${pr_json}")"
@@ -159,7 +168,6 @@ jobs:
               base="$(jq -r '.baseRefName' <<< "${pr_json}")"
               head="$(jq -r '.headRefName' <<< "${pr_json}")"
               title="$(jq -r '.title' <<< "${pr_json}")"
-              body="$(jq -r '.body // ""' <<< "${pr_json}")"
               labels_csv="$(jq -r '[.labels[].name] | join(",")' <<< "${pr_json}")"
               merge_state="$(jq -r '.mergeStateStatus' <<< "${pr_json}")"
               mergeable="$(jq -r '.mergeable' <<< "${pr_json}")"
@@ -190,8 +198,8 @@ jobs:
               IFS=',' read -r -a blocked <<< "${BLOCK_LABELS}"
               skip_blocked="false"
               for bl in "${blocked[@]}"; do
-                bl_trim="$(echo "${bl}" | xargs)"
-                if [ -n "${bl_trim}" ] && echo ",${labels_csv}," | grep -qi ",${bl_trim},"; then
+                bl_trim="$(xargs <<< "${bl}")"
+                if has_label "${labels_csv}" "${bl_trim}"; then
                   echo "Blocked by label '${bl_trim}'; skipping."
                   skip_blocked="true"
                   break
@@ -202,14 +210,25 @@ jobs:
                 continue
               fi
 
-              # Renovate-specific gating
-              if [ "${RENOVATE_AUTOMERGE_ONLY}" = "true" ] && [[ "${head}" == renovate/* ]]; then
-                if ! echo "${body}" | grep -Eqi 'Automerge\*\*?:?\s*Enabled|Automerge:\s*Enabled'; then
-                  echo "Renovate automerge not explicitly enabled in PR body; skipping."
+              # Renovate-specific gating is label-driven. Renovate emits
+              # automerge-candidate for update classes that the shared policy
+              # allows to merge after checks.
+              if [[ "${head}" == renovate/* ]]; then
+                IFS=',' read -r -a required <<< "${REQUIRED_LABELS}"
+                missing_required="false"
+                for rl in "${required[@]}"; do
+                  rl_trim="$(xargs <<< "${rl}")"
+                  if ! has_label "${labels_csv}" "${rl_trim}"; then
+                    echo "Missing required label '${rl_trim}'; skipping."
+                    missing_required="true"
+                    break
+                  fi
+                done
+                if [ "${missing_required}" = "true" ]; then
                   total_skipped=$((total_skipped+1))
                   continue
                 fi
-                echo "Renovate PR indicates automerge enabled."
+                echo "Required automerge labels present."
               fi
 
               # GitHub may return mergeable=UNKNOWN temporarily; retry a few times

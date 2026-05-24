@@ -2,6 +2,29 @@
 
 ## Available Workflows
 
+### Renovate
+
+Shared Renovate policy lives in `.github/renovate-config.json`. The scheduled
+org runner uses `.github/renovate-config.js` only for self-hosted runtime
+settings such as GitHub platform config, autodiscovery, cache, credentials, and
+`globalExtends`.
+
+Internal `FutureDevGuys` repos are picked up by the central runner. External
+consumers can add a local `renovate.json` containing:
+
+```json
+{
+  "extends": ["github>FutureDevGuys/.github:renovate-config"]
+}
+```
+
+The label contract is:
+
+- `automerge-candidate` allows hands-off merge after required gates.
+- `manual-review`, `major`, and `migration-required` block the shared
+  automerge sweep.
+- Repo-local `renovate.json` files should add only repo-local policy deltas.
+
 ### `security-scan.yml`
 
 Trivy filesystem scan — checks for vulnerabilities, misconfigurations, secrets, and license issues at HIGH+CRITICAL severity (ignoring unfixed).

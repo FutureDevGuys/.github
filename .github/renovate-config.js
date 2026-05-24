@@ -1,3 +1,8 @@
+const parseList = (value) => (value || '')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+
 const dockerHostRules = [
   ['docker.io', process.env.DOCKERHUB_USERNAME, process.env.DOCKERHUB_TOKEN],
   ['index.docker.io', process.env.DOCKERHUB_USERNAME, process.env.DOCKERHUB_TOKEN],
@@ -16,101 +21,34 @@ const dockerHostRules = [
     password,
   }));
 
-module.exports = {
-  dockerMaxPages: 3,
-  platformAutomerge: false,
-  rebaseWhen: 'behind-base-branch',
-  dependencyDashboard: true,
-  timezone: 'America/Phoenix',
+const repositories = parseList(process.env.RENOVATE_REPOSITORIES);
+const autodiscoverFilter = parseList(
+  process.env.RENOVATE_AUTODISCOVER_FILTER || 'FutureDevGuys/*',
+);
+
+const config = {
+  platform: process.env.RENOVATE_PLATFORM || 'github',
+  endpoint: process.env.RENOVATE_ENDPOINT || 'https://api.github.com',
   onboarding: false,
   requireConfig: 'optional',
-  platform: 'github',
-  autodiscover: true,
-  autodiscoverFilter: ['FutureDevGuys/*'],
+  globalExtends: [
+    process.env.RENOVATE_CONFIG_PRESET || 'local>FutureDevGuys/.github:renovate-config',
+  ],
   gitAuthor: 'Renovate Bot <bot@lablabland.com>',
-  ignorePaths: ['archived/**', '**/archived/**'],
-  cacheDir: '/cache',
-  repositoryCache: 'enabled',
+  timezone: process.env.RENOVATE_TIMEZONE || 'America/Phoenix',
+  cacheDir: process.env.RENOVATE_CACHE_DIR || '/tmp/renovate/cache',
+  repositoryCache: process.env.RENOVATE_REPOSITORY_CACHE || 'enabled',
   hostRules: dockerHostRules,
-
-  extends: [
-    'config:recommended',
-    ':automergeDigest',
-    ':label(renovate)',
-    ':semanticCommits',
-    'docker:pinDigests',
-    'group:allNonMajor',
-    'helpers:pinGitHubActionDigests',
-    'mergeConfidence:all-badges',
-    ':automergeMinor',
-  ],
-
-  prConcurrentLimit: 12,
-  prHourlyLimit: 6,
-
-  customManagers: [
-    {
-      customType: 'regex',
-      description:
-        'Track any # renovate: annotated version pin in YAML files across the org. '
-        + 'Supports lowercase keys (Ansible defaults), uppercase keys (docker-compose '
-        + 'build args), shell ${VAR:-default} values, and optional versioning= directive.',
-      managerFilePatterns: ['**/*.yml', '**/*.yaml'],
-      matchStrings: [
-        '#\\s*renovate:\\s*datasource=(?<datasource>[^\\s]+)\\s+depName=(?<depName>[^\\s]+)(?:\\s+versioning=(?<versioning>[^\\s\\n]+))?\\n\\s*\\w+_(?:version|VERSION):\\s*(?:\\$\\{[^:}]+:-)?["\']?(?<currentValue>[^"\'\\s\\n}]+)',
-      ],
-    },
-  ],
-
-  packageRules: [
-    {
-      matchFileNames: ['archived/**', '**/archived/**'],
-      enabled: false,
-    },
-    {
-      matchDatasources: ['docker'],
-      matchPackageNames: ['/^[^.:/]+([/][^/]+)*$/'],
-      minimumReleaseAge: '3 days',
-      internalChecksFilter: 'strict',
-    },
-    {
-      matchDatasources: ['docker'],
-      matchPackageNames: ['eceasy/cli-proxy-api'],
-      minimumReleaseAge: null,
-    },
-    {
-      matchDatasources: ['docker'],
-      matchUpdateTypes: ['digest'],
-      groupName: 'docker-digests',
-      automerge: true,
-      automergeType: 'pr',
-    },
-    {
-      matchManagers: ['dockerfile', 'docker-compose'],
-      matchUpdateTypes: ['patch', 'minor'],
-      groupName: 'docker-base-images',
-      automerge: true,
-      automergeType: 'pr',
-    },
-    {
-      matchManagers: ['dockerfile', 'docker-compose'],
-      matchUpdateTypes: ['major'],
-      groupName: 'docker-base-images',
-      automerge: false,
-    },
-    {
-      matchManagers: ['github-actions'],
-      groupName: 'github-actions',
-      automerge: true,
-      automergeType: 'pr',
-    },
-    {
-      matchManagers: ['github-actions'],
-      matchUpdateTypes: ['patch'],
-      groupName: 'gha-patches',
-      automerge: true,
-      automergeStrategy: 'auto',
-      automergeType: 'pr',
-    },
-  ],
 };
+
+if (repositories.length > 0) {
+  config.repositories = repositories;
+  config.autodiscover = false;
+} else {
+  config.autodiscover = process.env.RENOVATE_AUTODISCOVER !== 'false';
+  if (autodiscoverFilter.length > 0) {
+    config.autodiscoverFilter = autodiscoverFilter;
+  }
+}
+
+module.exports = config;
