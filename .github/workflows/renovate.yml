@@ -48,7 +48,7 @@ on:
         description: "Shared preset consumed by the runtime config"
         required: false
         type: string
-        default: "local>FutureDevGuys/.github:renovate-config"
+        default: "github>FutureDevGuys/.github:renovate-config"
   schedule:
     - cron: "0 */6 * * *"
 
@@ -70,7 +70,7 @@ jobs:
       RENOVATE_AUTODISCOVER: ${{ (github.event_name != 'workflow_dispatch' || inputs.repositories == '') && 'true' || 'false' }}
       RENOVATE_AUTODISCOVER_FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.autodiscoverFilter || 'FutureDevGuys/*' }}
       RENOVATE_REPOSITORIES: ${{ github.event_name == 'workflow_dispatch' && inputs.repositories || '' }}
-      RENOVATE_CONFIG_PRESET: ${{ github.event_name == 'workflow_dispatch' && inputs.configPreset || 'local>FutureDevGuys/.github:renovate-config' }}
+      RENOVATE_CONFIG_PRESET: ${{ github.event_name == 'workflow_dispatch' && inputs.configPreset || 'github>FutureDevGuys/.github:renovate-config' }}
       RENOVATE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dryRun != 'off' && inputs.dryRun || '' }}
 
     steps:

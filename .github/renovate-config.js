@@ -32,7 +32,7 @@ const config = {
   onboarding: false,
   requireConfig: 'optional',
   globalExtends: [
-    process.env.RENOVATE_CONFIG_PRESET || 'local>FutureDevGuys/.github:renovate-config',
+    process.env.RENOVATE_CONFIG_PRESET || 'github>FutureDevGuys/.github:renovate-config',
   ],
   gitAuthor: 'Renovate Bot <bot@lablabland.com>',
   timezone: process.env.RENOVATE_TIMEZONE || 'America/Phoenix',
