@@ -4,7 +4,7 @@
 
 ### Renovate
 
-Shared Renovate policy lives in `.github/renovate-config.json`. The scheduled
+Shared Renovate policy lives in `renovate-config.json`. The scheduled
 org runner uses `.github/renovate-config.js` only for self-hosted runtime
 settings such as GitHub platform config, autodiscovery, cache, credentials, and
 `globalExtends`.

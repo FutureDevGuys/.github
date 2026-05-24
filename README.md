@@ -4,7 +4,7 @@ This repository is the shared automation home for `FutureDevGuys`.
 
 ## Renovate
 
-- Shared preset: `.github/renovate-config.json`
+- Shared preset: `renovate-config.json`
 - Scheduled runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
 - Scope: org autodiscovery for `FutureDevGuys/*`
 
