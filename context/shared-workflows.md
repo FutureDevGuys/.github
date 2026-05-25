@@ -23,6 +23,8 @@ The label contract is:
 - `automerge-candidate` allows hands-off merge after required gates.
 - `manual-review`, `major`, and `migration-required` block the shared
   automerge sweep.
+- Major updates are visible manual PRs by default. Use repo-local policy only
+  for exceptions that should remain dashboard-approved before a PR exists.
 - Repo-local `renovate.json` files should add only repo-local policy deltas.
 
 ### `security-scan.yml`

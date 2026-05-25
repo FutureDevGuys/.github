@@ -10,6 +10,8 @@ This repository is the shared automation home for `FutureDevGuys`.
 
 Repo-specific policy remains in each repository's own `renovate.json` (e.g.
 Docker image review rules, version pin managers, submodule pointer policy).
+Major updates are created as visible manual PRs with block labels; repo-local
+policy can opt individual migration-heavy classes into dashboard approval.
 
 Internal `FutureDevGuys` repos are covered by the central runner and normally
 do not need a local Renovate config. External consumers can opt in with:
