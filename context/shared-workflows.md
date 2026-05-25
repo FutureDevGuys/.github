@@ -27,6 +27,10 @@ The label contract is:
   for exceptions that should remain dashboard-approved before a PR exists.
 - Repo-local `renovate.json` files should add only repo-local policy deltas.
 
+The automerge sweep uses squash merges and deletes merged Renovate branches. The
+org repositories are configured to allow squash merges only, so manual PR merges
+use the same history shape as the automation.
+
 ### `security-scan.yml`
 
 Trivy filesystem scan — checks for vulnerabilities, misconfigurations, secrets, and license issues at HIGH+CRITICAL severity (ignoring unfixed).

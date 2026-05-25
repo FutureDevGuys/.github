@@ -7,6 +7,7 @@ This repository is the shared automation home for `FutureDevGuys`.
 - Shared preset: `renovate-config.json`
 - Scheduled runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
 - Scope: org autodiscovery for `FutureDevGuys/*`
+- PR merge policy: squash-only, with branch deletion after merge.
 
 Repo-specific policy remains in each repository's own `renovate.json` (e.g.
 Docker image review rules, version pin managers, submodule pointer policy).
