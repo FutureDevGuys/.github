@@ -18,7 +18,10 @@ consumers can add a local `renovate.json` containing:
 }
 ```
 
-The label contract is:
+Renovate itself never merges PRs; it only creates and labels them. The
+self-hosted runtime force-overrides both `automerge` and `platformAutomerge` to
+false even if repository policy drifts. The label contract consumed by the
+separate sweep is:
 
 - `automerge-candidate` allows hands-off merge after required gates.
 - `manual-review`, `major`, and `migration-required` block the shared
@@ -26,21 +29,52 @@ The label contract is:
 - Major updates are visible manual PRs by default. Use repo-local policy only
   for exceptions that should remain dashboard-approved before a PR exists.
 - Repo-local `renovate.json` files should add only repo-local policy deltas.
+  They may label candidates but must not enable Renovate merging or select a
+  merge type/strategy; the scheduled adoption audit enforces that boundary for
+  every repository listed in `renovate_config_repositories`.
+- Immutable `digest` and `pinDigest` updates do not inherit a release-age gate;
+  non-immutable patch and minor updates retain their semantic cooldowns.
+
+The scheduled runner pins both the GitHub Action wrapper and the Renovate image
+tag/digest. It resolves the shared preset at the exact workflow commit through
+an authenticated API preflight, and it makes at most two attempts inside the
+job timeout. The automerge sweep uploads JSONL outcome records containing each
+candidate skip reason and PR age. An aged actionable blocker with zero eligible
+or merged progress marks the run degraded; policy-blocked manual work is
+reported but does not count as an actionable blocker.
 
 The automerge sweep uses squash merges and deletes merged Renovate branches. The
 org repositories are configured to allow squash merges only, so manual PR merges
 use the same history shape as the automation.
+
+`.github/automerge-policy.json` is the fail-closed identity and required-check
+contract. A candidate must have the exact trusted Renovate principal, the
+declared same-repository immutable ID and owner, and only Renovate-authored
+commits. The sweep reads check runs and commit statuses from the candidate's
+current head SHA, requires every declared check (including `trivy / trivy`), and
+requires every observed check/status to be completed successfully. Missing,
+pending, skipped, failed, stale, partial, or duplicate required evidence blocks
+the merge with a machine-readable reason. It also reads `security-scan.yml` at
+that same head and applies the adoption validator against the checked-out org
+revision, so a lookalike check name cannot replace the truthful shared caller.
+
+The current Renovate token principal is an ordinary GitHub user, not a dedicated
+bot/App; `context/state.md` tracks that residual identity-separation risk.
 
 ### `security-scan.yml`
 
 Trivy filesystem scan — checks for vulnerabilities, misconfigurations, secrets, and license issues at HIGH+CRITICAL severity (ignoring unfixed).
 
 **Features:**
-- Dependency-bot PR detection (Renovate/Dependabot) — skips scan, keeps check green
+- Runs on dependency-bot PRs instead of bypassing them
 - Concurrency cancellation for superseded PR/ref scans
-- JSON artifact upload (`trivy-results`) only on failure or manual dispatch
-- PR step summary with vuln/misconfig counts
-- Gate enforcement — fails the job on HIGH/CRITICAL findings
+- Always uploads `scan-result.json` and `trivy-results.json` as one evidence artifact
+- Receipt binds the tool version, caller repository/ref/event/commit, exact org
+  workflow revision, policy digests, Trivy schema, counts, report digest, and
+  execution outcome
+- The final gate independently recomputes HIGH/CRITICAL counts from the uploaded
+  report instead of trusting the receipt producer
+- Missing, skipped, malformed, non-clean, or digest-mismatched evidence fails closed
 - Embedded default `trivy.yaml` — repos without one get the org standard automatically
 
 ## How to Adopt in a New Repo
@@ -53,7 +87,10 @@ name: security-scan
 on:
   workflow_dispatch:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 9 * * 0"
 
 permissions:
   contents: read
@@ -62,17 +99,18 @@ jobs:
   trivy:
     uses: FutureDevGuys/.github/.github/workflows/security-scan.yml@<SHA>
     with:
-      is_dependency_bot_pr: ${{ github.event_name == 'pull_request' && (
-        github.actor == 'renovate[bot]' ||
-        github.actor == 'dependabot[bot]' ||
-        startsWith(github.head_ref, 'renovate/') ||
-        startsWith(github.head_ref, 'dependabot/')
-      ) }}
+      workflow_revision: "<SHA>"
     permissions:
       contents: read
 ```
 
-Replace `<SHA>` with the current commit SHA of the `.github` repo's main branch.
+WHEN adopting the shared workflow THEN you SHALL replace both `<SHA>` values
+with the same exact commit SHA from the `.github` repository after that org
+commit exists.
+
+You SHALL NOT add a job-level `if`, pass secrets, add another reusable-workflow
+input, widen either permissions block beyond `contents: read`, or filter
+dependency update pull requests out of this caller.
 
 2. (Optional) Add `trivy.yaml` in your repo root to override the default scan settings.
 3. (Optional) Add `.trivyignore.yaml` for documented suppressions (include expiry dates).
@@ -82,11 +120,20 @@ Replace `<SHA>` with the current commit SHA of the `.github` repo's main branch.
 
 - **Scan settings:** Override by placing a `trivy.yaml` in your repo root. The reusable workflow checks for it first; if absent, it writes the org default (HIGH+CRITICAL, ignore-unfixed, vuln/misconfig/secret/license scanners).
 - **Suppressions:** Add `.trivyignore.yaml` with documented exceptions. Include `expired_at` dates.
-- **Triggers:** Owned by the caller workflow. The default caller should keep `pull_request` + `workflow_dispatch` only. Add extra triggers only as an explicit repo override.
+- **Triggers:** Owned by the caller workflow. WHEN adding a caller THEN you SHALL
+  enable pull request, push to `main`, weekly schedule, and manual dispatch.
 
 ## SHA Pinning and Renovate
 
-Callers pin to a commit SHA in the `uses:` line. Renovate's `github-actions` manager detects this and auto-bumps when the `.github` repo gets new commits. The org's automerge rules merge these bump PRs automatically.
+Callers pin to a commit SHA in the `uses:` line. Renovate's `github-actions`
+manager detects this and opens a labeled bump PR when the `.github` repo gets a
+new commit. The org sweep merges that PR only after its identity, current-head
+caller, and repository-specific checks satisfy the automerge policy.
+
+The shared preset treats the `uses` SHA and `workflow_revision` as one
+`github-digest` dependency on the `.github` repository's `main` ref. Renovate
+updates both occurrences in one replacement; a one-sided update is rejected by
+the caller contract before it can appear green.
 
 ## Updating the Shared Workflow
 
@@ -94,6 +141,11 @@ Edit in this repo (`.github`) → push to main → all callers receive Renovate 
 
 ## Design Decisions
 
-- **`workflow_call` trigger:** The reusable workflow receives a caller-provided `is_dependency_bot_pr` input instead of trying to infer Renovate/Dependabot state from callee context. `actions/checkout` checks out the caller's repo, so per-repo config files resolve correctly.
+- **`workflow_call` trigger:** The reusable workflow receives the exact org
+  workflow revision and verifies the checked-out receipt validator against it.
+  `actions/checkout` checks out the caller's repo first, so per-repo config files
+  resolve correctly.
 - **Embedded defaults:** Zero-config onboarding - new repos don't need to copy `trivy.yaml`.
-- **Single boolean input:** The dependency-bot skip is computed in the caller workflow where `pull_request` context exists, then passed through to the shared workflow for consistent enforcement.
+- **One immutable revision input:** `workflow_revision` must match the SHA in
+  `jobs.trivy.uses`; the adoption audit rejects floating, mismatched, or stale
+  callers that do not use the audited org commit.

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "trusted_renovate_identity": {
+    "login": "DevGuyRash",
+    "id": "U_kgDOBdMcOQ",
+    "is_bot": false,
+    "commit_name": "Renovate Bot",
+    "commit_email": "bot@lablabland.com"
+  },
+  "repositories": {
+    "FutureDevGuys/personal-containers": {
+      "head_repository_id": "R_kgDOP8AgGQ",
+      "required_checks": [
+        {"name": "greenfield", "app_slug": "github-actions"},
+        {"name": "skill-projections", "app_slug": "github-actions"},
+        {"name": "trivy / trivy", "app_slug": "github-actions"}
+      ]
+    },
+    "FutureDevGuys/docker-configs": {
+      "head_repository_id": "R_kgDOOhowyA",
+      "required_checks": [
+        {"name": "trivy / trivy", "app_slug": "github-actions"}
+      ]
+    },
+    "FutureDevGuys/homelab-iac": {
+      "head_repository_id": "R_kgDORWkCyg",
+      "required_checks": [
+        {"name": "terraform-contract", "app_slug": "github-actions"},
+        {"name": "terraform (terraform)", "app_slug": "github-actions"},
+        {"name": "terraform (terraform/platform)", "app_slug": "github-actions"},
+        {"name": "terraform (terraform/modules/native_lxc)", "app_slug": "github-actions"},
+        {"name": "terraform (terraform/authentik)", "app_slug": "github-actions"},
+        {"name": "terraform (terraform/cloudflare-edge)", "app_slug": "github-actions"},
+        {"name": "terraform (terraform/cloudflare)", "app_slug": "github-actions"},
+        {"name": "terraform (bootstrap/migrations/current-single-host/terraform)", "app_slug": "github-actions"},
+        {"name": "ansible", "app_slug": "github-actions"},
+        {"name": "python", "app_slug": "github-actions"},
+        {"name": "shell", "app_slug": "github-actions"},
+        {"name": "trivy / trivy", "app_slug": "github-actions"}
+      ]
+    },
+    "FutureDevGuys/system-config": {
+      "head_repository_id": "R_kgDOR3Wxqg",
+      "required_checks": [
+        {"name": "rust", "app_slug": "github-actions"},
+        {"name": "rust-integration", "app_slug": "github-actions"},
+        {"name": "python", "app_slug": "github-actions"},
+        {"name": "shell", "app_slug": "github-actions"},
+        {"name": "powershell", "app_slug": "github-actions"},
+        {"name": "ansible", "app_slug": "github-actions"},
+        {"name": "trivy / trivy", "app_slug": "github-actions"}
+      ]
+    }
+  }
+}

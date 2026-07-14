@@ -25,6 +25,27 @@
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>[^\\s]+)\\s+depName=(?<depName>[^\\s]+)(?:\\s+versioning=(?<versioning>[^\\s\\n]+))?\\n\\s*\\w+_(?:version|VERSION):\\s*(?:\\$\\{[^:}]+:-)?[\"']?(?<currentValue>[^\"'\\s\\n}]+)"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Atomically update the shared security workflow call and its enforced revision input.",
+      "managerFilePatterns": ["/^\\.github/workflows/security-scan\\.ya?ml$/"],
+      "matchStrings": [
+        "    uses:\\s+FutureDevGuys/\\.github/\\.github/workflows/security-scan\\.yml@(?<currentDigest>[0-9a-f]{40})\\s*\\n    with:\\s*\\n      workflow_revision:\\s*[\"']?[0-9a-f]{40}[\"']?"
+      ],
+      "datasourceTemplate": "github-digest",
+      "depNameTemplate": "FutureDevGuys/.github",
+      "packageNameTemplate": "FutureDevGuys/.github",
+      "currentValueTemplate": "main",
+      "autoReplaceStringTemplate": "    uses: FutureDevGuys/.github/.github/workflows/security-scan.yml@{{{newDigest}}}\\n    with:\\n      workflow_revision: \"{{{newDigest}}}\""
+    },
+    {
+      "customType": "regex",
+      "description": "Track the exact Renovate runtime tag and digest used by the org GitHub Action.",
+      "managerFilePatterns": ["/^\\.github/workflows/renovate\\.yml$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>docker)\\s+depName=(?<depName>renovate/renovate)\\n\\s*renovate-version:\\s*[\"']?(?<currentValue>[^@\"'\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ]
     }
   ],
   "packageRules": [
@@ -39,10 +60,9 @@
       "addLabels": ["manual-review", "major"]
     },
     {
-      "description": "Automerge ordinary non-major updates after release age and checks.",
+      "description": "Label ordinary non-major updates for the identity-and-check-gated org sweep.",
       "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest"],
-      "automerge": true,
-      "automergeType": "pr",
+      "automerge": false,
       "minimumReleaseAge": "3 days",
       "internalChecksFilter": "strict",
       "addLabels": ["automerge-candidate"]
@@ -55,29 +75,26 @@
       "internalChecksFilter": "strict"
     },
     {
-      "description": "Automerge Docker digest refreshes after required checks pass.",
+      "description": "Label Docker digest refreshes for the identity-and-check-gated org sweep.",
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["digest"],
-      "automerge": true,
-      "automergeType": "pr",
+      "automerge": false,
       "addLabels": ["automerge-candidate"]
     },
     {
-      "description": "Automerge Dockerfile and Docker Compose patch/minor updates after release age and checks.",
+      "description": "Label Dockerfile and Docker Compose patch/minor updates for the org sweep.",
       "matchManagers": ["dockerfile", "docker-compose"],
       "matchUpdateTypes": ["patch", "minor"],
-      "automerge": true,
-      "automergeType": "pr",
+      "automerge": false,
       "minimumReleaseAge": "3 days",
       "internalChecksFilter": "strict",
       "addLabels": ["automerge-candidate"]
     },
     {
-      "description": "Automerge GitHub Actions routine updates after release age and checks.",
+      "description": "Label GitHub Actions routine updates for the org sweep.",
       "matchManagers": ["github-actions"],
       "matchUpdateTypes": ["digest", "minor", "patch", "pin", "pinDigest"],
-      "automerge": true,
-      "automergeType": "pr",
+      "automerge": false,
       "minimumReleaseAge": "3 days",
       "internalChecksFilter": "strict",
       "addLabels": ["automerge-candidate"]
@@ -87,9 +104,13 @@
       "matchManagers": ["github-actions"],
       "matchUpdateTypes": ["patch"],
       "groupName": "gha-patches",
-      "automerge": true,
-      "automergeStrategy": "auto",
-      "automergeType": "pr"
+      "automerge": false
+    },
+    {
+      "description": "Do not apply release-age gates to immutable digest and digest-pin updates.",
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "minimumReleaseAge": null,
+      "internalChecksFilter": "strict"
     }
   ]
 }

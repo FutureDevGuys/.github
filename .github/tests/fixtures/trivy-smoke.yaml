@@ -1,0 +1,9 @@
+severity:
+  - HIGH
+  - CRITICAL
+ignore-unfixed: true
+scanners:
+  - vuln
+  - misconfig
+  - secret
+  - license

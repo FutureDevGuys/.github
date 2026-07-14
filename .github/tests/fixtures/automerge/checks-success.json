@@ -1,0 +1,26 @@
+{
+  "total_count": 3,
+  "check_runs": [
+    {
+      "name": "greenfield",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {"slug": "github-actions"}
+    },
+    {
+      "name": "skill-projections",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {"slug": "github-actions"}
+    },
+    {
+      "name": "trivy / trivy",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {"slug": "github-actions"}
+    }
+  ]
+}

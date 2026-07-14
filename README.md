@@ -7,7 +7,15 @@ This repository is the shared automation home for `FutureDevGuys`.
 - Shared preset: `renovate-config.json`
 - Scheduled runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
 - Scope: org autodiscovery for `FutureDevGuys/*`
-- PR merge policy: squash-only, with branch deletion after merge.
+- Runtime contract: exact action SHA, exact Renovate tag and image digest, and an
+  authenticated shared preset pinned to the workflow commit
+- Failure contract: at most two Renovate attempts per run; automerge skips emit
+  reason-and-age evidence and aged zero-progress runs degrade
+- PR merge policy: the self-hosted runtime force-disables Renovate merge
+  execution and Renovate only labels candidates. The separate sweep validates
+  the exact Renovate principal, same-repository ID, commit identity, immutable
+  Trivy caller, and explicit successful checks for the current head SHA before a
+  squash merge with branch deletion.
 
 Repo-specific policy remains in each repository's own `renovate.json` (e.g.
 Docker image review rules, version pin managers, submodule pointer policy).
@@ -41,11 +49,28 @@ Supported `datasource` values include `github-releases`, `github-tags`,
 No per-repo `renovate.json` change is needed inside `FutureDevGuys` to use
 this — the org preset picks it up automatically.
 
+Required checks and immutable repository identities live in
+`.github/automerge-policy.json`. Missing, pending, skipped, stale-head, failed,
+or ambiguously duplicated checks block and are recorded as outcome reasons.
+The sweep also rejects a candidate whose current-head security caller is not a
+truthful adopter of the exact checked-out org workflow revision.
+The scheduled adoption audit also reads every declared repo-local
+`renovate.json` and rejects direct Renovate automerge settings, preserving the
+separate sweep as the only automated merge executor.
+
 ## Required Actions secrets
 
 - `RENOVATE_TOKEN`
+- `SECURITY_AUDIT_TOKEN` with read access to every private repository declared
+  in `.github/security-scan-adopters.json`
 - `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` when private Docker Hub access is needed
 - `GHCR_USERNAME` and `GHCR_TOKEN` when private GHCR access is needed
+
+WHEN configuring the scheduled security adoption audit THEN you SHALL provide
+`SECURITY_AUDIT_TOKEN`; the repository-scoped workflow token cannot enumerate
+private sibling repositories. WHEN enabling the root skill-projection job THEN
+you SHALL also expose that read token to `FutureDevGuys/personal-containers` so
+Actions can check out the exact private submodule gitlinks.
 
 An optional portable Docker runner can extend this preset at runtime. It should
 default to explicit repositories, not broad token autodiscovery.

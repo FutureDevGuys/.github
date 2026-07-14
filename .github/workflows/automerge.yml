@@ -29,7 +29,11 @@ env:
 jobs:
   sweep:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
+      - name: Checkout outcome contract
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
       - name: Automerge sweep
         env:
           GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
@@ -45,6 +49,7 @@ jobs:
           BLOCK_LABELS: "do-not-merge,manual-review,migration-required,major"
           MERGE_METHOD: squash
           DELETE_BRANCH: "true"
+          AUTOMERGE_POLICY: .github/automerge-policy.json
 
         shell: bash
         run: |
@@ -91,12 +96,40 @@ jobs:
           echo "  block_labels='${BLOCK_LABELS}'"
           echo "  merge_method=${MERGE_METHOD}"
           echo "  delete_branch=${DELETE_BRANCH}"
+          echo "  policy=${AUTOMERGE_POLICY}"
           echo "  dry_run=${DRY_RUN}"
           echo ""
 
           total_merged=0
           total_skipped=0
           total_dry=0
+          outcomes_file="automerge-outcomes.jsonl"
+          summary_file="automerge-summary.json"
+          : > "${outcomes_file}"
+          org_revision="$(git rev-parse HEAD)"
+          if ! [[ "${org_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: org workflow checkout is not an exact commit." >&2
+            exit 1
+          fi
+
+          record_outcome() {
+            local repository="$1" pull_request="$2" created_at="$3"
+            local outcome="$4" reason="$5" blocks_progress="$6" detail="$7"
+            local args=(
+              .github/scripts/automerge_outcomes.py record
+              --output "${outcomes_file}"
+              --repository "${repository}"
+              --pull-request "${pull_request}"
+              --created-at "${created_at}"
+              --outcome "${outcome}"
+              --reason "${reason}"
+              --detail "${detail}"
+            )
+            if [ "${blocks_progress}" = "true" ]; then
+              args+=(--blocks-progress)
+            fi
+            python3 "${args[@]}"
+          }
 
           has_label() {
             local labels_csv="$1"
@@ -118,8 +151,8 @@ jobs:
                 --json number,headRefName,baseRefName,isDraft \
                 --jq '.[] | select(.isDraft == false) | "\(.number)\t\(.headRefName)\t\(.baseRefName)"'
             )" || {
-              echo "WARNING: gh pr list failed for ${REPO} (auth/permissions?); skipping repo."
-              continue
+              echo "ERROR: gh pr list failed for ${REPO}; refusing a partial-success sweep." >&2
+              exit 1
             }
 
             candidates=()
@@ -160,25 +193,42 @@ jobs:
               echo "Processing ${REPO}#${pr}"
 
               pr_json="$(gh pr view --repo "${REPO}" "${pr}" \
-                --json number,state,isDraft,baseRefName,headRefName,title,labels,mergeStateStatus,mergeable
+                --json number,state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,author,title,labels,mergeStateStatus,mergeable,createdAt
               )"
 
               state="$(jq -r '.state' <<< "${pr_json}")"
               draft="$(jq -r '.isDraft' <<< "${pr_json}")"
               base="$(jq -r '.baseRefName' <<< "${pr_json}")"
               head="$(jq -r '.headRefName' <<< "${pr_json}")"
+              head_sha="$(jq -r '.headRefOid' <<< "${pr_json}")"
               title="$(jq -r '.title' <<< "${pr_json}")"
               labels_csv="$(jq -r '[.labels[].name] | join(",")' <<< "${pr_json}")"
               merge_state="$(jq -r '.mergeStateStatus' <<< "${pr_json}")"
               mergeable="$(jq -r '.mergeable' <<< "${pr_json}")"
+              created_at="$(jq -r '.createdAt' <<< "${pr_json}")"
 
               echo "PR: ${title}"
-              echo "state=${state} draft=${draft} base=${base} head=${head} labels=${labels_csv} mergeStateStatus=${merge_state} mergeable=${mergeable}"
+              echo "state=${state} draft=${draft} base=${base} head=${head} head_sha=${head_sha} labels=${labels_csv} mergeStateStatus=${merge_state} mergeable=${mergeable}"
 
               # Basic gates
-              [ "${state}" = "OPEN" ] || { echo "Not open; skipping."; total_skipped=$((total_skipped+1)); continue; }
-              [ "${draft}" != "true" ] || { echo "Draft; skipping."; total_skipped=$((total_skipped+1)); continue; }
-              [ "${base}" = "${TARGET_BRANCH}" ] || { echo "Targets '${base}', not '${TARGET_BRANCH}'; skipping."; total_skipped=$((total_skipped+1)); continue; }
+              if [ "${state}" != "OPEN" ]; then
+                echo "Not open; skipping."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped not_open false "state=${state}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              if [ "${draft}" = "true" ]; then
+                echo "Draft; skipping."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped draft false "draft=true"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              if [ "${base}" != "${TARGET_BRANCH}" ]; then
+                echo "Targets '${base}', not '${TARGET_BRANCH}'; skipping."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped wrong_base false "base=${base}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
 
               # Head prefix allowlist (re-check here for single-PR runs too)
               allowed="false"
@@ -190,6 +240,7 @@ jobs:
               done
               if [ "${allowed}" != "true" ]; then
                 echo "Head branch '${head}' does not match allowed prefixes; skipping."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped disallowed_head false "head=${head}"
                 total_skipped=$((total_skipped+1))
                 continue
               fi
@@ -206,6 +257,7 @@ jobs:
                 fi
               done
               if [ "${skip_blocked}" = "true" ]; then
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped blocked_label false "label=${bl_trim}"
                 total_skipped=$((total_skipped+1))
                 continue
               fi
@@ -225,11 +277,70 @@ jobs:
                   fi
                 done
                 if [ "${missing_required}" = "true" ]; then
+                  record_outcome "${REPO}" "${pr}" "${created_at}" skipped missing_required_label true "label=${rl_trim}"
                   total_skipped=$((total_skipped+1))
                   continue
                 fi
                 echo "Required automerge labels present."
               fi
+
+              # Verify the immutable Renovate principal, same-repository head,
+              # every commit identity, the current-head security caller, and
+              # explicit successful checks/statuses before trusting GitHub's
+              # aggregate merge state. Missing, stale, pending, skipped, or
+              # failed evidence records a machine-readable block reason.
+              candidate_slug="${REPO//\//-}-${pr}"
+              candidate_dir="automerge-candidates/${candidate_slug}"
+              mkdir -p "${candidate_dir}"
+              printf '%s\n' "${pr_json}" > "${candidate_dir}/pull-request.json"
+              evidence_ok="true"
+              if ! gh api \
+                "repos/${REPO}/pulls/${pr}/commits?per_page=100" \
+                --paginate --slurp > "${candidate_dir}/commit-pages.json"; then
+                evidence_ok="false"
+              elif ! jq '[.[][]]' \
+                "${candidate_dir}/commit-pages.json" > "${candidate_dir}/commits.json"; then
+                evidence_ok="false"
+              elif ! gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${REPO}/commits/${head_sha}/check-runs?per_page=100" \
+                > "${candidate_dir}/checks.json"; then
+                evidence_ok="false"
+              elif ! gh api \
+                "repos/${REPO}/commits/${head_sha}/status?per_page=100" \
+                > "${candidate_dir}/statuses.json"; then
+                evidence_ok="false"
+              elif ! gh api \
+                "repos/${REPO}/contents/.github/workflows/security-scan.yml?ref=${head_sha}" \
+                --jq '.content' | base64 --decode > "${candidate_dir}/security-scan.yml"; then
+                evidence_ok="false"
+              fi
+
+              if [ "${evidence_ok}" != "true" ]; then
+                echo "Candidate evidence could not be read completely; skipping."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped candidate_evidence_unavailable true "head_sha=${head_sha}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+
+              if ! python3 .github/scripts/validate_automerge_candidate.py \
+                --repository "${REPO}" \
+                --policy "${AUTOMERGE_POLICY}" \
+                --pull-request "${candidate_dir}/pull-request.json" \
+                --commits "${candidate_dir}/commits.json" \
+                --checks "${candidate_dir}/checks.json" \
+                --statuses "${candidate_dir}/statuses.json" \
+                --caller "${candidate_dir}/security-scan.yml" \
+                --required-security-revision "${org_revision}" \
+                --output "${candidate_dir}/result.json"; then
+                candidate_reason="$(jq -r '.reason // "candidate_contract_failed"' "${candidate_dir}/result.json")"
+                candidate_detail="$(jq -c '{head_sha, detail}' "${candidate_dir}/result.json")"
+                echo "Candidate contract blocked merge: ${candidate_reason}: ${candidate_detail}"
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped "${candidate_reason}" true "${candidate_detail}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              echo "Renovate identity, same-repository head, exact caller revision, and current-head checks are trusted."
 
               # GitHub may return mergeable=UNKNOWN temporarily; retry a few times
               if [ "${mergeable}" = "UNKNOWN" ]; then
@@ -249,6 +360,7 @@ jobs:
               # Only merge when GitHub says it's ready
               if [ "${mergeable}" != "MERGEABLE" ]; then
                 echo "Not mergeable yet (mergeable=${mergeable}); skipping."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped not_mergeable true "mergeable=${mergeable}"
                 total_skipped=$((total_skipped+1))
                 continue
               fi
@@ -258,12 +370,14 @@ jobs:
                   gh pr checks --repo "${REPO}" "${pr}" --required || true
                 fi
                 echo "Not merge-ready (mergeStateStatus=${merge_state}); skipping."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped checks_not_ready true "mergeStateStatus=${merge_state}"
                 total_skipped=$((total_skipped+1))
                 continue
               fi
 
               if [ "${DRY_RUN}" = "true" ]; then
                 echo "DRY RUN: would merge ${REPO}#${pr} now."
+                record_outcome "${REPO}" "${pr}" "${created_at}" dry_run eligible false "dry_run=true"
                 total_dry=$((total_dry+1))
                 continue
               fi
@@ -276,11 +390,13 @@ jobs:
               echo "Attempting merge: gh pr merge --repo ${REPO} ${pr} ${merge_args[*]}"
               if gh pr merge --repo "${REPO}" "${pr}" "${merge_args[@]}"; then
                 echo "Merge complete."
+                record_outcome "${REPO}" "${pr}" "${created_at}" merged merged false "method=${MERGE_METHOD}"
                 total_merged=$((total_merged+1))
               else
                 echo "Merge failed (likely blocked by protections/checks). Current required checks:"
                 gh pr checks --repo "${REPO}" "${pr}" --required || true
                 echo "Will retry on next sweep."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped merge_failed true "method=${MERGE_METHOD}"
                 total_skipped=$((total_skipped+1))
               fi
             done
@@ -292,3 +408,42 @@ jobs:
           echo "  merged=${total_merged}"
           echo "  skipped=${total_skipped}"
           echo "  dry_run_eligible=${total_dry}"
+
+          python3 .github/scripts/automerge_outcomes.py summarize \
+            --input "${outcomes_file}" \
+            --output "${summary_file}" \
+            --degrade-after-hours 24
+
+          {
+            echo "## Automerge outcome contract"
+            echo '```json'
+            cat "${summary_file}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload automerge outcome evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: automerge-outcomes
+          path: |
+            automerge-outcomes.jsonl
+            automerge-summary.json
+            automerge-candidates/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce zero-progress degradation
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -s automerge-summary.json ]; then
+            echo "Automerge summary is missing." >&2
+            exit 1
+          fi
+          if ! jq -e '.schema_version == 1 and .degraded == false' automerge-summary.json >/dev/null; then
+            echo "Automerge made zero progress while aged actionable skips remain." >&2
+            cat automerge-summary.json >&2
+            exit 1
+          fi

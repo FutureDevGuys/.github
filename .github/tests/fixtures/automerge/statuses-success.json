@@ -1,0 +1,8 @@
+{
+  "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state": "success",
+  "total_count": 1,
+  "statuses": [
+    {"context": "renovate/stability-days", "state": "success"}
+  ]
+}
