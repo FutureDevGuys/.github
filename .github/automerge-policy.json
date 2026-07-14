@@ -19,6 +19,7 @@
     "FutureDevGuys/docker-configs": {
       "head_repository_id": "R_kgDOOhowyA",
       "required_checks": [
+        {"name": "contract-and-history", "app_slug": "github-actions"},
         {"name": "trivy / trivy", "app_slug": "github-actions"}
       ]
     },
