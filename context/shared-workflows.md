@@ -76,6 +76,9 @@ Trivy filesystem scan — checks for vulnerabilities, misconfigurations, secrets
   report instead of trusting the receipt producer
 - Missing, skipped, malformed, non-clean, or digest-mismatched evidence fails closed
 - Embedded default `trivy.yaml` — repos without one get the org standard automatically
+- The action boundary explicitly enforces vulnerability, misconfiguration,
+  secret, and license scanners plus HIGH/CRITICAL severity, so a stale or
+  partial repo-local config cannot silently disable a scanner
 
 ## How to Adopt in a New Repo
 
@@ -112,13 +115,19 @@ You SHALL NOT add a job-level `if`, pass secrets, add another reusable-workflow
 input, widen either permissions block beyond `contents: read`, or filter
 dependency update pull requests out of this caller.
 
-2. (Optional) Add `trivy.yaml` in your repo root to override the default scan settings.
+2. (Optional) Add `trivy.yaml` only for a documented repository-specific delta.
+   Validate it with the exact pinned Trivy version; Trivy accepts unknown or
+   obsolete key locations without necessarily applying them.
 3. (Optional) Add `.trivyignore.yaml` for documented suppressions (include expiry dates).
 4. Push — Renovate will auto-track the SHA pin from then on.
 
 ## Customization
 
-- **Scan settings:** Override by placing a `trivy.yaml` in your repo root. The reusable workflow checks for it first; if absent, it writes the org default (HIGH+CRITICAL, ignore-unfixed, vuln/misconfig/secret/license scanners).
+- **Scan settings:** Prefer no repo-local file. When a real delta is required,
+  use the pinned-version schema; for Trivy 0.69 the relevant paths are
+  `scan.scanners` and `vulnerability.ignore-unfixed`. The reusable workflow
+  still enforces all four scanners and HIGH/CRITICAL severity at the action
+  boundary.
 - **Suppressions:** Add `.trivyignore.yaml` with documented exceptions. Include `expired_at` dates.
 - **Triggers:** Owned by the caller workflow. WHEN adding a caller THEN you SHALL
   enable pull request, push to `main`, weekly schedule, and manual dispatch.
