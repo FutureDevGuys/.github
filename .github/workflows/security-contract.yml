@@ -67,6 +67,9 @@ jobs:
           scan-ref: .github/tests/fixtures/trivy-smoke
           trivy-config: .github/tests/fixtures/trivy-smoke.yaml
           trivyignores: .github/tests/fixtures/trivy-smoke.ignore.yaml
+          scanners: vuln,misconfig,secret,license
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
           format: json
           output: trivy-smoke-results.json
           exit-code: "1"

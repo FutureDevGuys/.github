@@ -2,5 +2,18 @@
   "SchemaVersion": 2,
   "ArtifactName": ".",
   "ArtifactType": "filesystem",
-  "Results": []
+  "Results": [
+    {
+      "Target": "Dockerfile",
+      "Class": "config",
+      "Type": "dockerfile",
+      "Misconfigurations": [
+        {
+          "ID": "contract-pass-marker",
+          "Status": "PASS",
+          "Severity": "CRITICAL"
+        }
+      ]
+    }
+  ]
 }

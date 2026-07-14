@@ -57,6 +57,11 @@ def report_finding_counts(payload: dict[str, Any]) -> tuple[dict[str, int], list
                         "must be an object"
                     )
                     continue
+                if (
+                    collection == "Misconfigurations"
+                    and str(finding.get("Status", "FAIL")).upper() != "FAIL"
+                ):
+                    continue
                 severity = str(finding.get("Severity", "")).upper()
                 if severity in SEVERITIES:
                     counts[severity.lower()] += 1

@@ -39,12 +39,14 @@ jobs:
           severity:
             - HIGH
             - CRITICAL
-          ignore-unfixed: true
-          scanners:
-            - vuln
-            - misconfig
-            - secret
-            - license
+          vulnerability:
+            ignore-unfixed: true
+          scan:
+            scanners:
+              - vuln
+              - misconfig
+              - secret
+              - license
           TRIVYEOF
           sed -i 's/^          //' .trivy-default.yaml
           echo "path=.trivy-default.yaml" >> "$GITHUB_OUTPUT"
@@ -70,6 +72,9 @@ jobs:
           scan-ref: .
           trivy-config: ${{ steps.trivyconfig.outputs.path }}
           trivyignores: ${{ steps.trivyignore.outputs.path }}
+          scanners: vuln,misconfig,secret,license
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
           format: json
           output: trivy-results.json
           exit-code: "1"

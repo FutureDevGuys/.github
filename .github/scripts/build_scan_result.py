@@ -68,6 +68,12 @@ def report_evidence(path: Path) -> tuple[dict[str, Any] | None, dict[str, int]]:
                         for finding in findings:
                             if not isinstance(finding, dict):
                                 continue
+                            if (
+                                collection == "Misconfigurations"
+                                and str(finding.get("Status", "FAIL")).upper()
+                                != "FAIL"
+                            ):
+                                continue
                             severity = str(finding.get("Severity", "")).upper()
                             if severity in SEVERITIES:
                                 counts[severity.lower()] += 1

@@ -172,6 +172,43 @@ class ScanResultContractTests(unittest.TestCase):
             errors = validator.validate_receipt(receipt, report)
             self.assertIn("result.high does not match the uploaded report", errors)
 
+    def test_failed_misconfiguration_is_counted_but_pass_is_not(self):
+        with tempfile.TemporaryDirectory() as temp:
+            receipt, report = self.receipt(Path(temp))
+            self.assertEqual(receipt["result"]["critical"], 0)
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            payload["Results"][0]["Misconfigurations"][0]["Status"] = "FAIL"
+            raw = (json.dumps(payload, sort_keys=True) + "\n").encode()
+            report.write_bytes(raw)
+            receipt["report"].update(
+                {
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "size_bytes": len(raw),
+                }
+            )
+            errors = validator.validate_receipt(receipt, report)
+            self.assertIn(
+                "result.critical does not match the uploaded report",
+                errors,
+            )
+
+    def test_workflows_enforce_all_scanners_with_current_config_schema(self):
+        for relative_path in (
+            ".github/workflows/security-scan.yml",
+            ".github/workflows/security-contract.yml",
+        ):
+            text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertIn("scanners: vuln,misconfig,secret,license", text)
+            self.assertIn("severity: HIGH,CRITICAL", text)
+            self.assertIn("ignore-unfixed: true", text)
+
+        default_workflow = (
+            REPO_ROOT / ".github/workflows/security-scan.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("          vulnerability:\n", default_workflow)
+        self.assertIn("          scan:\n", default_workflow)
+        self.assertIn("            scanners:\n", default_workflow)
+
 
 class CallerContractTests(unittest.TestCase):
     def test_checked_in_caller_fixture_passes(self):

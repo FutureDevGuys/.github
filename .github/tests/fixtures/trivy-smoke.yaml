@@ -1,9 +1,13 @@
 severity:
   - HIGH
   - CRITICAL
-ignore-unfixed: true
-scanners:
-  - vuln
-  - misconfig
-  - secret
-  - license
+vulnerability:
+  ignore-unfixed: true
+scan:
+  scanners:
+    - vuln
+    - misconfig
+    - secret
+    - license
+misconfiguration:
+  include-non-failures: true
