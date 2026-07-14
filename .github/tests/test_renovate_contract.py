@@ -201,6 +201,13 @@ class RenovatePolicyTests(unittest.TestCase):
         for repository in policy["repositories"].values():
             names = {check["name"] for check in repository["required_checks"]}
             self.assertIn("trivy / trivy", names)
+        docker_names = {
+            check["name"]
+            for check in policy["repositories"]["FutureDevGuys/docker-configs"][
+                "required_checks"
+            ]
+        }
+        self.assertIn("contract-and-history", docker_names)
 
 
 class AutomergeCandidateTests(unittest.TestCase):
@@ -282,6 +289,21 @@ class AutomergeCandidateTests(unittest.TestCase):
         checks["total_count"] = len(checks["check_runs"])
         result = self.evaluate(checks=checks)
         self.assertEqual(result["reason"], "required_check_missing")
+
+    def test_docker_candidate_without_owner_contract_is_blocked(self):
+        pull_request = deepcopy(self.pull_request)
+        pull_request["headRepository"] = {
+            "id": self.policy["repositories"]["FutureDevGuys/docker-configs"][
+                "head_repository_id"
+            ],
+            "nameWithOwner": "FutureDevGuys/docker-configs",
+        }
+        result = self.evaluate(
+            repository="FutureDevGuys/docker-configs",
+            pull_request=pull_request,
+        )
+        self.assertEqual(result["reason"], "required_check_missing")
+        self.assertIn("contract-and-history", result["detail"])
 
     def test_duplicate_required_check_is_blocked(self):
         checks = deepcopy(self.checks)
