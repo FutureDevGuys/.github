@@ -1,0 +1,2 @@
+{"age_hours": 30.0, "blocks_progress": true, "created_at": "2026-07-13T00:00:00Z", "detail": "required checks are failing", "observed_at": "2026-07-14T06:00:00Z", "outcome": "skipped", "pull_request": 41, "reason": "checks_not_ready", "repository": "FutureDevGuys/example", "schema_version": 1}
+{"age_hours": 48.0, "blocks_progress": false, "created_at": "2026-07-12T06:00:00Z", "detail": "manual-review", "observed_at": "2026-07-14T06:00:00Z", "outcome": "skipped", "pull_request": 42, "reason": "blocked_label", "repository": "FutureDevGuys/example", "schema_version": 1}

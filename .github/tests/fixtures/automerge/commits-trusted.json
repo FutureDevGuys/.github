@@ -1,0 +1,9 @@
+[
+  {
+    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "commit": {
+      "author": {"name": "Renovate Bot", "email": "bot@lablabland.com"},
+      "committer": {"name": "Renovate Bot", "email": "bot@lablabland.com"}
+    }
+  }
+]

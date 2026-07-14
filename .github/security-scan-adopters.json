@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "repositories": [
+    "FutureDevGuys/docker-configs",
+    "FutureDevGuys/homelab-iac",
+    "FutureDevGuys/personal-containers",
+    "FutureDevGuys/system-config"
+  ],
+  "renovate_config_repositories": [
+    "FutureDevGuys/docker-configs",
+    "FutureDevGuys/homelab-iac",
+    "FutureDevGuys/personal-containers"
+  ]
+}

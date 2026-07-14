@@ -3,11 +3,10 @@ name: security-scan
 on:
   workflow_call:
     inputs:
-      is_dependency_bot_pr:
-        description: Whether the caller detected a Renovate/Dependabot PR.
-        required: false
-        type: boolean
-        default: false
+      workflow_revision:
+        description: Exact .github commit SHA used by this reusable workflow call.
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,21 +19,15 @@ jobs:
   trivy:
     name: trivy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
-    env:
-      IS_DEPENDENCY_BOT_PR: ${{ inputs.is_dependency_bot_pr }}
     steps:
-      - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
-
-      - name: Skip on dependency bot PRs
-        if: env.IS_DEPENDENCY_BOT_PR == 'true'
-        run: echo "Skipping Trivy scan for dependency bot PR; keeping check green."
+      - name: Checkout caller repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Resolve Trivy config
         id: trivyconfig
-        if: env.IS_DEPENDENCY_BOT_PR != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -46,19 +39,20 @@ jobs:
           severity:
             - HIGH
             - CRITICAL
-          ignore-unfixed: true
-          scanners:
-            - vuln
-            - misconfig
-            - secret
-            - license
+          vulnerability:
+            ignore-unfixed: true
+          scan:
+            scanners:
+              - vuln
+              - misconfig
+              - secret
+              - license
           TRIVYEOF
           sed -i 's/^          //' .trivy-default.yaml
           echo "path=.trivy-default.yaml" >> "$GITHUB_OUTPUT"
 
       - name: Resolve Trivy ignore file
         id: trivyignore
-        if: env.IS_DEPENDENCY_BOT_PR != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -69,9 +63,8 @@ jobs:
           : > .trivyignore.empty.yaml
           echo "path=.trivyignore.empty.yaml" >> "$GITHUB_OUTPUT"
 
-      - name: Trivy repo scan (JSON, enforce)
+      - name: Trivy repository scan
         id: trivy_scan
-        if: env.IS_DEPENDENCY_BOT_PR != 'true'
         continue-on-error: true
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
@@ -79,43 +72,99 @@ jobs:
           scan-ref: .
           trivy-config: ${{ steps.trivyconfig.outputs.path }}
           trivyignores: ${{ steps.trivyignore.outputs.path }}
+          scanners: vuln,misconfig,secret,license
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
           format: json
           output: trivy-results.json
           exit-code: "1"
 
-      - name: Attach report artifact
-        if: ${{ always() && env.IS_DEPENDENCY_BOT_PR != 'true' && steps.trivy_scan.outcome == 'failure' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      - name: Checkout scan contract at reusable workflow revision
+        if: always()
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          name: trivy-results
-          path: trivy-results.json
-          if-no-files-found: warn
+          repository: FutureDevGuys/.github
+          ref: ${{ inputs.workflow_revision }}
+          path: .security-contract
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
 
-      - name: Add summary
-        if: ${{ always() && env.IS_DEPENDENCY_BOT_PR != 'true' && steps.trivy_scan.outcome != '' }}
+      - name: Verify scan contract revision
+        if: always()
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ inputs.workflow_revision }}
+        run: |
+          set -euo pipefail
+          actual_revision="$(git -C .security-contract rev-parse HEAD)"
+          if [[ ! "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "workflow_revision is not an exact commit SHA: $EXPECTED_REVISION" >&2
+            exit 1
+          fi
+          if [[ "$actual_revision" != "$EXPECTED_REVISION" ]]; then
+            echo "scan contract revision mismatch: expected=$EXPECTED_REVISION actual=$actual_revision" >&2
+            exit 1
+          fi
+
+      - name: Build scan execution receipt
+        if: always()
+        shell: bash
+        env:
+          SCAN_OUTCOME: ${{ steps.trivy_scan.outcome }}
+          TRIVY_CONFIG: ${{ steps.trivyconfig.outputs.path }}
+          TRIVY_IGNORE: ${{ steps.trivyignore.outputs.path }}
+        run: |
+          set -euo pipefail
+          tool_version="$(trivy --version 2>/dev/null | head -n 1 || true)"
+          python3 .security-contract/.github/scripts/build_scan_result.py \
+            --output scan-result.json \
+            --report trivy-results.json \
+            --scan-outcome "${SCAN_OUTCOME:-skipped}" \
+            --tool-version "$tool_version" \
+            --repository "${{ github.repository }}" \
+            --ref "${{ github.ref }}" \
+            --commit "${{ github.sha }}" \
+            --event "${{ github.event_name }}" \
+            --workflow-revision "${{ inputs.workflow_revision }}" \
+            --config "${TRIVY_CONFIG:-.trivy-default.yaml}" \
+            --ignore-file "${TRIVY_IGNORE:-.trivyignore.empty.yaml}"
+
+      - name: Upload scan result evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: scan-result
+          path: |
+            scan-result.json
+            trivy-results.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Add scan summary
+        if: always()
         shell: bash
         run: |
-          echo "## Trivy summary" >> "$GITHUB_STEP_SUMMARY"
-          if [[ ! -f trivy-results.json ]]; then
-            echo "_No trivy-results.json produced by scan step._" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if command -v jq >/dev/null 2>&1; then
+          echo "## Trivy execution receipt" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f scan-result.json ]]; then
             jq -r '
-              def allV: [ .Results[]? | .Vulnerabilities? // [] ] | add // [];
-              def allM: [ .Results[]? | .Misconfigurations? // [] ] | add // [];
-              "Vulnerabilities: HIGH=\( (allV | map(select(.Severity=="HIGH")) | length) ), " +
-              "CRITICAL=\( (allV | map(select(.Severity=="CRITICAL")) | length) )",
-              "Misconfigurations: HIGH=\( (allM | map(select(.Severity=="HIGH")) | length) ), " +
-              "CRITICAL=\( (allM | map(select(.Severity=="CRITICAL")) | length) )"
-            ' trivy-results.json >> "$GITHUB_STEP_SUMMARY" || echo "No JSON results." >> "$GITHUB_STEP_SUMMARY"
+              "- Executed: \(.executed)",
+              "- Tool: \(.tool.name) \(.tool.version)",
+              "- Result: \(.result.status)",
+              "- HIGH: \(.result.high)",
+              "- CRITICAL: \(.result.critical)",
+              "- Report SHA-256: \(.report.sha256 // \"missing\")"
+            ' scan-result.json >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "_jq not available on runner_" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Receipt missing" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Enforce Trivy gate
-        if: ${{ env.IS_DEPENDENCY_BOT_PR != 'true' && steps.trivy_scan.outcome == 'failure' }}
-        shell: bash
-        run: |
-          echo "Trivy found HIGH/CRITICAL issues. See artifact and summary for details."
-          exit 1
+      - name: Enforce truthful Trivy gate
+        if: always()
+        run: >-
+          python3 .security-contract/.github/scripts/validate_scan_result.py
+          scan-result.json trivy-results.json
+          --repository "${{ github.repository }}"
+          --ref "${{ github.ref }}"
+          --commit "${{ github.sha }}"
+          --event "${{ github.event_name }}"
+          --workflow-revision "${{ inputs.workflow_revision }}"

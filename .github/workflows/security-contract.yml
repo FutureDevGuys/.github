@@ -1,0 +1,139 @@
+name: security-contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/automerge-policy.json"
+      - ".github/renovate-config.js"
+      - ".github/security-scan-adopters.json"
+      - ".github/scripts/**"
+      - ".github/tests/**"
+      - ".github/workflows/**"
+      - "renovate-config.json"
+  push:
+    branches: [main]
+    paths:
+      - ".github/automerge-policy.json"
+      - ".github/renovate-config.js"
+      - ".github/security-scan-adopters.json"
+      - ".github/scripts/**"
+      - ".github/tests/**"
+      - ".github/workflows/**"
+      - "renovate-config.json"
+  schedule:
+    - cron: "30 8 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Lint workflows and caller fixture
+        run: >-
+          docker run --rm
+          -v "$PWD:/repo"
+          -w /repo
+          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          -color
+          -shellcheck=
+          -pyflakes=
+          .github/workflows/*.yml
+          .github/tests/fixtures/security-scan-caller.yml
+
+  scan-contract-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Run receipt and caller contract fixtures
+        run: python3 -m unittest discover -s .github/tests -p "test_*.py" -v
+
+  trivy-contract-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Run pinned Trivy action against clean fixture
+        id: trivy_scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        with:
+          scan-type: fs
+          scan-ref: .github/tests/fixtures/trivy-smoke
+          trivy-config: .github/tests/fixtures/trivy-smoke.yaml
+          trivyignores: .github/tests/fixtures/trivy-smoke.ignore.yaml
+          scanners: vuln,misconfig,secret,license
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: json
+          output: trivy-smoke-results.json
+          exit-code: "1"
+      - name: Build real-action receipt
+        if: always()
+        env:
+          SCAN_OUTCOME: ${{ steps.trivy_scan.outcome }}
+        run: |
+          set -euo pipefail
+          tool_version="$(trivy --version 2>/dev/null | head -n 1 || true)"
+          python3 .github/scripts/build_scan_result.py \
+            --output trivy-smoke-receipt.json \
+            --report trivy-smoke-results.json \
+            --scan-outcome "${SCAN_OUTCOME:-skipped}" \
+            --tool-version "${tool_version}" \
+            --repository "${{ github.repository }}" \
+            --ref "${{ github.ref }}" \
+            --commit "${{ github.sha }}" \
+            --event "${{ github.event_name }}" \
+            --workflow-revision "${{ github.sha }}" \
+            --config .github/tests/fixtures/trivy-smoke.yaml \
+            --ignore-file .github/tests/fixtures/trivy-smoke.ignore.yaml
+      - name: Upload real-action evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: trivy-contract-smoke
+          path: |
+            trivy-smoke-receipt.json
+            trivy-smoke-results.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enforce real-action receipt
+        if: always()
+        run: >-
+          python3 .github/scripts/validate_scan_result.py
+          trivy-smoke-receipt.json trivy-smoke-results.json
+          --repository "${{ github.repository }}"
+          --ref "${{ github.ref }}"
+          --commit "${{ github.sha }}"
+          --event "${{ github.event_name }}"
+          --workflow-revision "${{ github.sha }}"
+
+  adoption-audit:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Require private-repository read token
+        env:
+          GH_TOKEN: ${{ secrets.SECURITY_AUDIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "SECURITY_AUDIT_TOKEN is required for adoption audits across private repositories." >&2
+            exit 1
+          fi
+          gh auth status
+      - name: Audit declared repository callers on main
+        env:
+          GH_TOKEN: ${{ secrets.SECURITY_AUDIT_TOKEN }}
+        run: >-
+          python3 .github/scripts/audit_security_scan_adoption.py
+          --manifest .github/security-scan-adopters.json
+          --ref main
+          --required-revision ${{ github.sha }}

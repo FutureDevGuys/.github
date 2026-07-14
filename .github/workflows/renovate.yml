@@ -44,11 +44,6 @@ on:
           - "off"
           - lookup
           - full
-      configPreset:
-        description: "Shared preset consumed by the runtime config"
-        required: false
-        type: string
-        default: "github>FutureDevGuys/.github:renovate-config"
   schedule:
     - cron: "0 */6 * * *"
 
@@ -65,20 +60,20 @@ env:
 jobs:
   renovate:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     env:
       RENOVATE_AUTODISCOVER: ${{ (github.event_name != 'workflow_dispatch' || inputs.repositories == '') && 'true' || 'false' }}
       RENOVATE_AUTODISCOVER_FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.autodiscoverFilter || 'FutureDevGuys/*' }}
       RENOVATE_REPOSITORIES: ${{ github.event_name == 'workflow_dispatch' && inputs.repositories || '' }}
-      RENOVATE_CONFIG_PRESET: ${{ github.event_name == 'workflow_dispatch' && inputs.configPreset || 'github>FutureDevGuys/.github:renovate-config' }}
+      RENOVATE_CONFIG_PRESET: github>FutureDevGuys/.github:renovate-config#${{ github.sha }}
       RENOVATE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dryRun != 'off' && inputs.dryRun || '' }}
 
     steps:
       - name: Checkout (optional for Renovate)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Preflight - Validate GitHub token (RENOVATE_TOKEN)
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.validateCreds == 'true' }}
+      - name: Preflight - Validate token and exact shared preset
         shell: bash
         env:
           RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
@@ -101,6 +96,16 @@ jobs:
 
           command -v gh >/dev/null 2>&1 || { echo "ERROR: gh is required for repo autodiscovery preflight."; exit 1; }
           command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required for repo autodiscovery preflight."; exit 1; }
+
+          if [[ ! "${RENOVATE_CONFIG_PRESET}" =~ ^github\>FutureDevGuys/\.github:renovate-config\#[0-9a-f]{40}$ ]]; then
+            echo "ERROR: RENOVATE_CONFIG_PRESET must use the exact org preset at a 40-character commit SHA." >&2
+            exit 1
+          fi
+          preset_revision="${RENOVATE_CONFIG_PRESET##*#}"
+          GH_TOKEN="${RENOVATE_TOKEN}" gh api \
+            "repos/FutureDevGuys/.github/contents/renovate-config.json?ref=${preset_revision}" \
+            --jq '.sha' >/dev/null
+          echo "OK: authenticated read of exact shared preset revision ${preset_revision}."
 
           if [ -n "${RENOVATE_REPOSITORIES:-}" ]; then
             echo "Explicit repository mode:"
@@ -185,11 +190,44 @@ jobs:
           tar -xzf "cache-download/${cache_archive}" -C "${cache_dir}" || true
           sudo chown -R 12021:0 /tmp/renovate/ || true
 
-      - name: Self-hosted Renovate (GitHub Action)
-        uses: renovatebot/github-action@b50d2ba2bd928235abdcc14d06dfafc217f1c565 # v46.1.18
+      - name: Self-hosted Renovate (attempt 1 of 2)
+        id: renovate_primary
+        continue-on-error: true
+        uses: renovatebot/github-action@22e0a16091fc706b04affe6ae53d5e3358ac4023 # v46.1.19
         with:
           configurationFile: .github/renovate-config.js
           token: ${{ secrets.RENOVATE_TOKEN }}
+          # renovate: datasource=docker depName=renovate/renovate
+          renovate-version: 43.263.3@sha256:dbdb501ad9a2558ab8f99538b1d4be0a8768cf8c3383aaa33a35ed981dfe3464
+          env-regex: "^(?:RENOVATE_\\w+|DOCKERHUB_\\w+|GHCR_\\w+|LOG_LEVEL)$"
+        env:
+          LOG_LEVEL: ${{ github.event.inputs.logLevel || 'info' }}
+          RENOVATE_CACHE_DIR: /tmp/renovate/cache
+          RENOVATE_REPOSITORY_CACHE: ${{ github.event.inputs.repoCache || 'enabled' }}
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          RENOVATE_AUTODISCOVER: ${{ env.RENOVATE_AUTODISCOVER }}
+          RENOVATE_AUTODISCOVER_FILTER: ${{ env.RENOVATE_AUTODISCOVER_FILTER }}
+          RENOVATE_AUTODISCOVER_ORG: ${{ env.renovate_org }}
+          RENOVATE_REPOSITORIES: ${{ env.RENOVATE_REPOSITORIES }}
+          RENOVATE_CONFIG_PRESET: ${{ env.RENOVATE_CONFIG_PRESET }}
+          RENOVATE_DRY_RUN: ${{ env.RENOVATE_DRY_RUN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Bounded retry delay
+        if: steps.renovate_primary.outcome == 'failure'
+        run: sleep 30
+
+      - name: Self-hosted Renovate (attempt 2 of 2)
+        if: steps.renovate_primary.outcome == 'failure'
+        uses: renovatebot/github-action@22e0a16091fc706b04affe6ae53d5e3358ac4023 # v46.1.19
+        with:
+          configurationFile: .github/renovate-config.js
+          token: ${{ secrets.RENOVATE_TOKEN }}
+          # renovate: datasource=docker depName=renovate/renovate
+          renovate-version: 43.263.3@sha256:dbdb501ad9a2558ab8f99538b1d4be0a8768cf8c3383aaa33a35ed981dfe3464
           env-regex: "^(?:RENOVATE_\\w+|DOCKERHUB_\\w+|GHCR_\\w+|LOG_LEVEL)$"
         env:
           LOG_LEVEL: ${{ github.event.inputs.logLevel || 'info' }}

@@ -25,6 +25,14 @@ const repositories = parseList(process.env.RENOVATE_REPOSITORIES);
 const autodiscoverFilter = parseList(
   process.env.RENOVATE_AUTODISCOVER_FILTER || 'FutureDevGuys/*',
 );
+const preset = process.env.RENOVATE_CONFIG_PRESET || '';
+const exactPresetPattern = /^github>FutureDevGuys\/\.github:renovate-config#[0-9a-f]{40}$/;
+
+if (!exactPresetPattern.test(preset)) {
+  throw new Error(
+    'RENOVATE_CONFIG_PRESET must pin github>FutureDevGuys/.github:renovate-config to an exact 40-character commit SHA',
+  );
+}
 
 const config = {
   platform: process.env.RENOVATE_PLATFORM || 'github',
@@ -32,8 +40,12 @@ const config = {
   onboarding: false,
   requireConfig: 'optional',
   globalExtends: [
-    process.env.RENOVATE_CONFIG_PRESET || 'github>FutureDevGuys/.github:renovate-config',
+    preset,
   ],
+  force: {
+    automerge: false,
+    platformAutomerge: false,
+  },
   gitAuthor: 'Renovate Bot <bot@lablabland.com>',
   timezone: process.env.RENOVATE_TIMEZONE || 'America/Phoenix',
   cacheDir: process.env.RENOVATE_CACHE_DIR || '/tmp/renovate/cache',
