@@ -1,14 +1,22 @@
 {
   "schema_version": 1,
+  "organization": {
+    "login": "FutureDevGuys",
+    "id": 221667046,
+    "node_id": "O_kgDODTZe5g"
+  },
   "trusted_renovate_identity": {
     "login": "DevGuyRash",
     "id": "U_kgDOBdMcOQ",
     "is_bot": false,
     "commit_name": "Renovate Bot",
-    "commit_email": "bot@lablabland.com"
+    "commit_email": "bot@lablabland.com",
+    "refresh_committer_name": "Dev Guy Rash",
+    "refresh_committer_email": "97721401+DevGuyRash@users.noreply.github.com"
   },
   "repositories": {
     "FutureDevGuys/personal-containers": {
+      "repository_id": 1069555737,
       "head_repository_id": "R_kgDOP8AgGQ",
       "required_checks": [
         {"name": "greenfield", "app_slug": "github-actions"},
@@ -17,6 +25,7 @@
       ]
     },
     "FutureDevGuys/docker-configs": {
+      "repository_id": 974794952,
       "head_repository_id": "R_kgDOOhowyA",
       "required_checks": [
         {"name": "contract-and-history", "app_slug": "github-actions"},
@@ -24,6 +33,7 @@
       ]
     },
     "FutureDevGuys/homelab-iac": {
+      "repository_id": 1164509898,
       "head_repository_id": "R_kgDORWkCyg",
       "required_checks": [
         {"name": "terraform-contract", "app_slug": "github-actions"},
@@ -41,6 +51,7 @@
       ]
     },
     "FutureDevGuys/system-config": {
+      "repository_id": 1198895530,
       "head_repository_id": "R_kgDOR3Wxqg",
       "required_checks": [
         {"name": "rust", "app_slug": "github-actions"},

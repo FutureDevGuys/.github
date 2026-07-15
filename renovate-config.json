@@ -10,7 +10,6 @@
     "helpers:pinGitHubActionDigests",
     "mergeConfidence:all-badges"
   ],
-  "dockerMaxPages": 3,
   "platformAutomerge": false,
   "rebaseWhen": "behind-base-branch",
   "dependencyDashboard": true,

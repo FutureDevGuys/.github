@@ -6,6 +6,7 @@
   },
   "headRefName": "renovate/example-1.x",
   "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "commitCount": 1,
   "headRepository": {
     "id": "R_kgDOP8AgGQ",
     "nameWithOwner": "FutureDevGuys/personal-containers"

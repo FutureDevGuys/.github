@@ -51,9 +51,36 @@ def _load_repository_policy(
     repositories = policy.get("repositories")
     if not isinstance(identity, dict) or not isinstance(repositories, dict):
         return None, blocked("invalid_policy", "identity and repositories mappings are required")
+    required_identity_fields = (
+        "login",
+        "id",
+        "commit_name",
+        "commit_email",
+        "refresh_committer_name",
+        "refresh_committer_email",
+    )
+    if any(
+        not isinstance(identity.get(field), str) or not identity[field].strip()
+        for field in required_identity_fields
+    ) or not isinstance(identity.get("is_bot"), bool):
+        return None, blocked(
+            "invalid_policy", "trusted Renovate and refresh identities are incomplete"
+        )
     repository_policy = repositories.get(repository)
     if not isinstance(repository_policy, dict):
         return None, blocked("repository_not_adopted", f"{repository} is absent from automerge policy")
+    repository_id = repository_policy.get("repository_id")
+    head_repository_id = repository_policy.get("head_repository_id")
+    if (
+        not isinstance(repository_id, int)
+        or isinstance(repository_id, bool)
+        or repository_id <= 0
+        or not isinstance(head_repository_id, str)
+        or not head_repository_id.strip()
+    ):
+        return None, blocked(
+            "invalid_policy", f"{repository} must bind exact REST and GraphQL IDs"
+        )
     required_checks = repository_policy.get("required_checks")
     if not isinstance(required_checks, list) or not required_checks:
         return None, blocked("invalid_policy", f"{repository} has no required checks")
@@ -125,8 +152,20 @@ def evaluate_candidate(
             head_sha,
         )
 
-    if not isinstance(commits, list) or not commits:
-        return blocked("commit_evidence_missing", "PR commit evidence is empty", head_sha)
+    expected_commit_count = pull_request.get("commitCount")
+    if (
+        not isinstance(expected_commit_count, int)
+        or isinstance(expected_commit_count, bool)
+        or expected_commit_count <= 0
+        or expected_commit_count > 250
+        or not isinstance(commits, list)
+        or expected_commit_count != len(commits)
+    ):
+        return blocked(
+            "commit_evidence_incomplete",
+            "PR commit evidence is malformed, partially paginated, or exceeds the 250-commit API cap",
+            head_sha,
+        )
     if commits[-1].get("sha") != head_sha:
         return blocked(
             "stale_commit_evidence",
@@ -139,16 +178,28 @@ def evaluate_candidate(
         git_committer = git_commit.get("committer") if isinstance(git_commit, dict) else None
         if not isinstance(git_author, dict) or not isinstance(git_committer, dict):
             return blocked("untrusted_commit_identity", "commit identity is missing", head_sha)
-        for role, value in (("author", git_author), ("committer", git_committer)):
-            if (
-                value.get("name") != identity.get("commit_name")
-                or value.get("email") != identity.get("commit_email")
-            ):
-                return blocked(
-                    "untrusted_commit_identity",
-                    f"commit {commit.get('sha')} {role} is not the Renovate identity",
-                    head_sha,
-                )
+        if (
+            git_author.get("name") != identity.get("commit_name")
+            or git_author.get("email") != identity.get("commit_email")
+        ):
+            return blocked(
+                "untrusted_commit_identity",
+                f"commit {commit.get('sha')} author is not the Renovate identity",
+                head_sha,
+            )
+        trusted_committers = {
+            (identity.get("commit_name"), identity.get("commit_email")),
+            (
+                identity.get("refresh_committer_name"),
+                identity.get("refresh_committer_email"),
+            ),
+        }
+        if (git_committer.get("name"), git_committer.get("email")) not in trusted_committers:
+            return blocked(
+                "untrusted_commit_identity",
+                f"commit {commit.get('sha')} committer is neither Renovate nor the policy-bound refresh principal",
+                head_sha,
+            )
 
     caller_errors = validate_caller(caller_text, required_security_revision)
     if caller_errors:
