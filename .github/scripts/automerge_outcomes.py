@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 
 SCHEMA_VERSION = 1
-OUTCOMES = {"merged", "dry_run", "skipped"}
+OUTCOMES = {"merged", "refreshed", "skipped"}
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -103,7 +103,7 @@ def summarize_records(
         and not isinstance(record.get("age_hours"), bool)
         and float(record["age_hours"]) >= degrade_after_hours
     ]
-    progress = outcome_counts["merged"] + outcome_counts["dry_run"]
+    progress = outcome_counts["merged"] + outcome_counts["refreshed"]
     return {
         "schema_version": SCHEMA_VERSION,
         "record_count": len(materialized),
@@ -121,7 +121,8 @@ def summarize_records(
         ),
         "degrade_after_hours": degrade_after_hours,
         "stale_progress_blockers": len(stale_blockers),
-        "degraded": progress == 0 and bool(stale_blockers),
+        "progress_count": progress,
+        "degraded": bool(stale_blockers),
     }
 
 
