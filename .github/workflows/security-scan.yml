@@ -152,7 +152,8 @@ jobs:
               "- Result: \(.result.status)",
               "- HIGH: \(.result.high)",
               "- CRITICAL: \(.result.critical)",
-              "- Report SHA-256: \(.report.sha256 // \"missing\")"
+              (.report.sha256 // "missing") as $report_sha |
+              "- Report SHA-256: \($report_sha)"
             ' scan-result.json >> "$GITHUB_STEP_SUMMARY"
           else
             echo "- Receipt missing" >> "$GITHUB_STEP_SUMMARY"
