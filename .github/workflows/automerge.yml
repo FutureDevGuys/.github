@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout outcome contract
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
 
       - name: Automerge sweep
         env:
@@ -35,6 +37,7 @@ jobs:
           MERGE_METHOD: squash
           DELETE_BRANCH: "true"
           AUTOMERGE_POLICY: .github/automerge-policy.json
+          SECURITY_CONTRACT_RELEASE_REF: refs/heads/security-contract-v1
 
         shell: bash
         run: |
@@ -101,10 +104,42 @@ jobs:
           total_skipped=0
           outcomes_file="automerge-outcomes.jsonl"
           summary_file="automerge-summary.json"
+          security_revision_receipt="security-contract-revision.json"
           : > "${outcomes_file}"
-          org_revision="$(git rev-parse HEAD)"
-          if ! [[ "${org_revision}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "ERROR: org workflow checkout is not an exact commit." >&2
+          if ! security_contract_release_target="$(gh api \
+            "repos/${ORG}/.github/git/ref/${SECURITY_CONTRACT_RELEASE_REF#refs/}" \
+            --jq '.object.sha')"; then
+            echo "ERROR: the security contract release ref is unavailable; refusing an unversioned sweep." >&2
+            exit 1
+          fi
+          if ! python3 .github/scripts/resolve_security_contract_revision.py \
+            --repo . \
+            --output "${security_revision_receipt}" \
+            --release-ref-target "${security_contract_release_target}"; then
+            echo "ERROR: the reusable security contract revision or release ref is not provable." >&2
+            exit 1
+          fi
+          security_contract_revision="$(
+            jq -r '.security_contract_revision // ""' "${security_revision_receipt}"
+          )"
+          org_security_authority_head="$(
+            jq -r '.head_revision // ""' "${security_revision_receipt}"
+          )"
+          org_security_authority_bundle_digest="$(
+            jq -r '.authority_bundle_digest // ""' "${security_revision_receipt}"
+          )"
+          security_contract_release_ref="$(
+            jq -r '.release_ref // ""' "${security_revision_receipt}"
+          )"
+          checkout_head="$(git rev-parse HEAD)"
+          if ! [[ "${security_contract_revision}" =~ ^[0-9a-f]{40}$ ]] || \
+            ! [[ "${security_contract_release_target}" =~ ^[0-9a-f]{40}$ ]] || \
+            ! [[ "${org_security_authority_head}" =~ ^[0-9a-f]{40}$ ]] || \
+            ! [[ "${org_security_authority_bundle_digest}" =~ ^[0-9a-f]{64}$ ]] || \
+            [ "${security_contract_release_ref}" != "${SECURITY_CONTRACT_RELEASE_REF}" ] || \
+            [ "${security_contract_release_target}" != "${security_contract_revision}" ] || \
+            [ "${org_security_authority_head}" != "${checkout_head}" ]; then
+            echo "ERROR: resolved security contract authority is malformed or not checkout-bound." >&2
             exit 1
           fi
 
@@ -451,7 +486,7 @@ jobs:
                 --checks "${candidate_dir}/checks.json" \
                 --statuses "${candidate_dir}/statuses.json" \
                 --caller "${candidate_dir}/security-scan.yml" \
-                --required-security-revision "${org_revision}" \
+                --required-security-revision "${security_contract_revision}" \
                 --output "${candidate_dir}/result.json"; then
                 candidate_reason="$(jq -r '.reason // "candidate_contract_failed"' "${candidate_dir}/result.json")"
                 candidate_detail="$(jq -c '{head_sha, detail}' "${candidate_dir}/result.json")"
@@ -535,7 +570,7 @@ jobs:
                 --checks "${candidate_dir}/premerge-checks.json" \
                 --statuses "${candidate_dir}/premerge-statuses.json" \
                 --caller "${candidate_dir}/premerge-security-scan.yml" \
-                --required-security-revision "${org_revision}" \
+                --required-security-revision "${security_contract_revision}" \
                 --output "${candidate_dir}/premerge-result.json"; then
                 premerge_reason="$(jq -r '.reason // "premerge_candidate_contract_failed"' "${candidate_dir}/premerge-result.json")"
                 premerge_detail="$(jq -c '{head_sha, detail}' "${candidate_dir}/premerge-result.json")"
@@ -562,6 +597,45 @@ jobs:
                 fi
                 echo "Not merge-ready (mergeStateStatus=${merge_state}); skipping."
                 record_outcome "${REPO}" "${pr}" "${created_at}" skipped checks_not_ready true "mergeStateStatus=${merge_state}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+
+              # Revalidate the organization authority immediately before merge.
+              # Any default-branch advance revokes this in-flight sweep, even
+              # when candidate evidence itself remained unchanged.
+              if ! latest_org_authority_head="$(gh api \
+                "repos/${ORG}/.github/commits/${TARGET_BRANCH}" --jq '.sha')"; then
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped org_security_authority_unavailable true "initial_head=${org_security_authority_head}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              if ! latest_security_contract_release_target="$(gh api \
+                "repos/${ORG}/.github/git/ref/${SECURITY_CONTRACT_RELEASE_REF#refs/}" \
+                --jq '.object.sha')"; then
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped org_security_contract_ref_unavailable true "ref=${SECURITY_CONTRACT_RELEASE_REF}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              if ! [[ "${latest_org_authority_head}" =~ ^[0-9a-f]{40}$ ]]; then
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped org_security_authority_unavailable true "malformed_current_head"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              if ! [[ "${latest_security_contract_release_target}" =~ ^[0-9a-f]{40}$ ]]; then
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped org_security_contract_ref_unavailable true "malformed_current_target"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              final_security_revision_receipt="${candidate_dir}/premerge-security-contract-revision.json"
+              if ! python3 .github/scripts/resolve_security_contract_revision.py \
+                --repo . \
+                --output "${final_security_revision_receipt}" \
+                --initial-receipt "${security_revision_receipt}" \
+                --current-default-head "${latest_org_authority_head}" \
+                --release-ref-target "${latest_security_contract_release_target}"; then
+                echo "Organization security authority or its release ref advanced or changed during this sweep; holding merge."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped org_security_authority_advanced true "initial_head=${org_security_authority_head} current_head=${latest_org_authority_head} initial_release_target=${security_contract_release_target} current_release_target=${latest_security_contract_release_target} bundle=${org_security_authority_bundle_digest}"
                 total_skipped=$((total_skipped+1))
                 continue
               fi
@@ -662,6 +736,7 @@ jobs:
           path: |
             automerge-discovered-repositories.json
             automerge-repository-visibility.json
+            security-contract-revision.json
             automerge-outcomes.jsonl
             automerge-summary.json
             automerge-candidates/

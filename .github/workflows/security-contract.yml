@@ -119,6 +119,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
       - name: Require private-repository read token
         env:
           GH_TOKEN: ${{ secrets.SECURITY_AUDIT_TOKEN }}
@@ -129,6 +131,20 @@ jobs:
             exit 1
           fi
           gh auth status
+      - name: Resolve exact path-scoped security authority
+        id: security_authority
+        env:
+          GH_TOKEN: ${{ secrets.SECURITY_AUDIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_target="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/heads/security-contract-v1" \
+            --jq '.object.sha')"
+          python3 .github/scripts/resolve_security_contract_revision.py \
+            --repo . \
+            --output security-contract-adoption-authority.json \
+            --release-ref-target "${release_target}"
+          echo "revision=${release_target}" >> "${GITHUB_OUTPUT}"
       - name: Audit declared repository callers on main
         env:
           GH_TOKEN: ${{ secrets.SECURITY_AUDIT_TOKEN }}
@@ -136,4 +152,4 @@ jobs:
           python3 .github/scripts/audit_security_scan_adoption.py
           --manifest .github/security-scan-adopters.json
           --ref main
-          --required-revision ${{ github.sha }}
+          --required-revision ${{ steps.security_authority.outputs.revision }}
