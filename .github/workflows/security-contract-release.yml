@@ -1,0 +1,150 @@
+name: Security contract release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bootstrap_release_ref:
+        description: Create the missing security-contract-v1 ref after operator review
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+    paths:
+      - ".github/security-contract-dependencies.v1.json"
+      - ".github/scripts/build_scan_result.py"
+      - ".github/scripts/validate_scan_result.py"
+      - ".github/workflows/security-scan.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: security-contract-release
+  cancel-in-progress: false
+
+env:
+  SECURITY_CONTRACT_RELEASE_REF: refs/heads/security-contract-v1
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout complete default-branch history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve latest protected-path revision
+        run: >-
+          python3 .github/scripts/resolve_security_contract_revision.py
+          --repo .
+          --output security-contract-authority.json
+
+      - name: Read exact current release ref
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="security-contract-matching-refs.json"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/git/matching-refs/${SECURITY_CONTRACT_RELEASE_REF#refs/}" \
+            > "${response}"
+          count="$(jq --arg ref "${SECURITY_CONTRACT_RELEASE_REF}" \
+            '[.[] | select(.ref == $ref)] | length' "${response}")"
+          if [ "${count}" -gt 1 ]; then
+            echo "ERROR: the security contract release ref is ambiguous." >&2
+            exit 1
+          fi
+          current_target="$(jq -r --arg ref "${SECURITY_CONTRACT_RELEASE_REF}" \
+            '[.[] | select(.ref == $ref) | .object.sha][0] // ""' "${response}")"
+          echo "target=${current_target}" >> "${GITHUB_OUTPUT}"
+
+      - name: Plan fail-closed release movement
+        env:
+          BOOTSTRAP_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_release_ref }}
+          CURRENT_TARGET: ${{ steps.current.outputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            plan
+            --repo .
+            --receipt security-contract-authority.json
+            --output security-contract-release-plan.json
+          )
+          if [ -n "${CURRENT_TARGET}" ]; then
+            args+=(--current-target "${CURRENT_TARGET}")
+          fi
+          if [ "${BOOTSTRAP_REQUESTED}" = "true" ]; then
+            args+=(--bootstrap)
+          fi
+          python3 .github/scripts/manage_security_contract_release.py "${args[@]}"
+
+      - name: Require current main before mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "ERROR: main advanced after this release run started; a newer run must publish it." >&2
+            exit 1
+          fi
+
+      - name: Apply exact fast-forward release plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          action="$(jq -r '.action' security-contract-release-plan.json)"
+          desired="$(jq -r '.desired_target' security-contract-release-plan.json)"
+          case "${action}" in
+            create)
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+                --raw-field ref="${SECURITY_CONTRACT_RELEASE_REF}" \
+                --raw-field sha="${desired}" >/dev/null
+              ;;
+            update)
+              gh api --method PATCH \
+                "repos/${GITHUB_REPOSITORY}/git/refs/${SECURITY_CONTRACT_RELEASE_REF#refs/}" \
+                --raw-field sha="${desired}" \
+                --field force=false >/dev/null
+              ;;
+            noop)
+              echo "Security contract release ref is already exact."
+              ;;
+            *)
+              echo "ERROR: held or unknown release plan cannot mutate the ref." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify exact release postcondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          observed="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/${SECURITY_CONTRACT_RELEASE_REF#refs/}" \
+            --jq '.object.sha')"
+          python3 .github/scripts/manage_security_contract_release.py verify \
+            --plan security-contract-release-plan.json \
+            --observed-target "${observed}"
+
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: security-contract-release-${{ github.run_id }}
+          path: |
+            security-contract-authority.json
+            security-contract-release-plan.json
+          if-no-files-found: warn
+          retention-days: 14
