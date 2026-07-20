@@ -15,7 +15,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from urllib.parse import quote
 
 
@@ -290,7 +290,7 @@ def run_git(repo: Path, arguments: list[str], *, text: bool = True) -> str | byt
         raise GovernanceError("git command failed") from error
     if completed.returncode != 0:
         raise GovernanceError(f"git command failed: {' '.join(arguments[:2])}")
-    return completed.stdout
+    return cast(str | bytes, completed.stdout)
 
 
 def exact_revision(repo: Path, ref: str) -> str:
@@ -429,7 +429,7 @@ def enabled(raw: Any, field: str) -> bool:
     value = raw.get(field) if isinstance(raw, dict) else None
     if not isinstance(value, dict) or not isinstance(value.get("enabled"), bool):
         raise GovernanceError(f"branch protection lacks {field}")
-    return value["enabled"]
+    return bool(value["enabled"])
 
 
 def inspect_protection(

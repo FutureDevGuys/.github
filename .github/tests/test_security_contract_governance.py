@@ -25,6 +25,15 @@ FIXTURE = json.loads(
     ).read_text(encoding="utf-8")
 )
 POLICY_PATH = REPO_ROOT / ".github/security-contract-governance.json"
+TEST_REVISION = "HEAD"
+
+# The fixture models the live API shape, while its default-branch SHA belongs to
+# the exact checkout under test. This keeps the contract valid for PR merge
+# commits and future main commits without weakening the production audit's
+# explicit origin/main latch.
+FIXTURE["main_ref"]["object"]["sha"] = governance.exact_revision(
+    REPO_ROOT, TEST_REVISION
+)
 
 
 class FixtureClient:
@@ -87,7 +96,9 @@ class MissingSignatureProtectionClient(FixtureClient):
 class GovernanceContractTests(unittest.TestCase):
     def setUp(self):
         self.policy = governance.load_policy(POLICY_PATH)
-        self.resolution = governance.resolve_bundle(REPO_ROOT, self.policy, "origin/main")
+        self.resolution = governance.resolve_bundle(
+            REPO_ROOT, self.policy, TEST_REVISION
+        )
 
     def test_live_fixture_proves_exact_signed_protected_authority(self):
         authority, findings = governance.audit_authority(
@@ -250,7 +261,7 @@ class GovernanceContractTests(unittest.TestCase):
 
     def test_release_plan_is_digest_bound_and_noops_the_existing_ref(self):
         plan = governance.make_release_plan(
-            FixtureClient(), REPO_ROOT, self.policy, "origin/main"
+            FixtureClient(), REPO_ROOT, self.policy, TEST_REVISION
         )
         governance.validate_plan(plan, self.policy, plan["plan_digest"])
         names = [operation["operation"] for operation in plan["operations"]]
@@ -262,7 +273,7 @@ class GovernanceContractTests(unittest.TestCase):
 
     def test_bootstrap_plan_creates_then_protects_and_audits_release_ref(self):
         plan = governance.make_release_plan(
-            FixtureClient(missing_release=True), REPO_ROOT, self.policy, "origin/main"
+            FixtureClient(missing_release=True), REPO_ROOT, self.policy, TEST_REVISION
         )
         names = [operation["operation"] for operation in plan["operations"]]
         self.assertEqual(
@@ -279,7 +290,7 @@ class GovernanceContractTests(unittest.TestCase):
     def test_approved_noop_apply_still_requires_the_remote_postcondition(self):
         client = FixtureClient()
         plan = governance.make_release_plan(
-            client, REPO_ROOT, self.policy, "origin/main"
+            client, REPO_ROOT, self.policy, TEST_REVISION
         )
         with tempfile.TemporaryDirectory() as temporary:
             receipt = Path(temporary) / "apply-receipt.json"
@@ -300,7 +311,7 @@ class GovernanceContractTests(unittest.TestCase):
     def test_apply_rejects_a_digest_valid_but_noncanonical_operation_list(self):
         client = FixtureClient()
         plan = governance.make_release_plan(
-            client, REPO_ROOT, self.policy, "origin/main"
+            client, REPO_ROOT, self.policy, TEST_REVISION
         )
         unsigned = {key: value for key, value in plan.items() if key != "plan_digest"}
         unsigned["operations"] = [
@@ -326,7 +337,7 @@ class GovernanceContractTests(unittest.TestCase):
     def test_bootstrap_failure_after_ref_creation_is_retained_not_silent(self):
         client = FailingBootstrapClient()
         plan = governance.make_release_plan(
-            client, REPO_ROOT, self.policy, "origin/main"
+            client, REPO_ROOT, self.policy, TEST_REVISION
         )
         with tempfile.TemporaryDirectory() as temporary:
             receipt = Path(temporary) / "apply-receipt.json"
@@ -355,6 +366,7 @@ class GovernanceContractTests(unittest.TestCase):
         self.assertIn("\n          validate\n", workflow)
         self.assertIn("if-no-files-found: error", workflow)
         self.assertIn("security-contract-governance-receipt.json", workflow)
+        self.assertIn("fetch-depth: 0", workflow)
         self.assertNotIn("apply-release", workflow)
 
 
