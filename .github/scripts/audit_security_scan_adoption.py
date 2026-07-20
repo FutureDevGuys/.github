@@ -23,6 +23,9 @@ REVISION_RE = re.compile(
 )
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 FORBIDDEN_AUTOMERGE_KEYS = {"automergeType", "automergeStrategy"}
+ORG_CANDIDATE_LABEL = "automerge-candidate"
+ORG_BLOCK_LABELS = {"do-not-merge", "manual-review", "migration-required", "major"}
+ORG_RESERVED_LABELS = {ORG_CANDIDATE_LABEL, *ORG_BLOCK_LABELS}
 
 
 def indented_block(text: str, key: str, indent: int) -> str | None:
@@ -52,6 +55,16 @@ def direct_mapping_entries(block: str, indent: int) -> list[tuple[str, str]]:
     return [(key, value.strip()) for key, value in pattern.findall(block)]
 
 
+def direct_mapping_keys(block: str, indent: int) -> list[str]:
+    """Return every direct mapping key, including block-valued entries."""
+
+    pattern = re.compile(
+        rf"^{' ' * indent}([A-Za-z0-9_-]+):(?:\s|$)",
+        re.MULTILINE,
+    )
+    return pattern.findall(block)
+
+
 def validate_read_only_permissions(
     block: str | None,
     indent: int,
@@ -67,6 +80,9 @@ def validate_read_only_permissions(
 
 def validate_caller(text: str, required_revision: str | None = None) -> list[str]:
     errors: list[str] = []
+    top_level_keys = direct_mapping_keys(text, 0)
+    if any(top_level_keys.count(key) != 1 for key in ("on", "permissions", "jobs")):
+        errors.append("caller must declare on, permissions, and jobs exactly once")
     on_block = indented_block(text, "on", 0)
     jobs_block = indented_block(text, "jobs", 0)
     trivy_block = indented_block(jobs_block or "", "trivy", 2)
@@ -78,9 +94,19 @@ def validate_caller(text: str, required_revision: str | None = None) -> list[str
         on_block = ""
     if jobs_block is None:
         errors.append("caller must define a block-style top-level jobs mapping")
+    elif direct_mapping_keys(jobs_block, 2) != ["trivy"]:
+        errors.append("caller jobs mapping must contain exactly one trivy job")
     if trivy_block is None:
         errors.append("caller must expose the stable trivy job name")
         trivy_block = ""
+    elif sorted(direct_mapping_keys(trivy_block, 4)) != [
+        "permissions",
+        "uses",
+        "with",
+    ]:
+        errors.append(
+            "caller trivy job must contain only uses, with, and permissions once each"
+        )
     errors.extend(
         validate_read_only_permissions(
             indented_block(text, "permissions", 0),
@@ -114,6 +140,15 @@ def validate_caller(text: str, required_revision: str | None = None) -> list[str
     for trigger in ("pull_request", "push", "schedule", "workflow_dispatch"):
         if not re.search(rf"^  {trigger}:\s*(?:$|\{{|\[)", on_block, re.MULTILINE):
             errors.append(f"caller is missing the {trigger} trigger")
+    if sorted(direct_mapping_keys(on_block, 2)) != [
+        "pull_request",
+        "push",
+        "schedule",
+        "workflow_dispatch",
+    ]:
+        errors.append(
+            "caller on mapping must contain each required trigger exactly once"
+        )
     pull_request_block = indented_block(on_block, "pull_request", 2) or ""
     if re.search(
         r"^    (?:branches|branches-ignore|paths|paths-ignore):\s*",
@@ -176,6 +211,25 @@ def validate_renovate_config(text: str) -> list[str]:
                     errors.append(
                         f"{child_path} must not be present; the org sweep owns merge execution"
                     )
+                if key in {"addLabels", "labels"} and isinstance(child, list):
+                    normalized = {
+                        item.casefold() for item in child if isinstance(item, str)
+                    }
+                    if ORG_CANDIDATE_LABEL in normalized:
+                        errors.append(
+                            f"{child_path} must not assign {ORG_CANDIDATE_LABEL}; "
+                            "the org preset owns merge eligibility"
+                        )
+                if key == "removeLabels" and isinstance(child, list):
+                    normalized = {
+                        item.casefold() for item in child if isinstance(item, str)
+                    }
+                    removed = sorted(normalized & ORG_RESERVED_LABELS)
+                    if removed:
+                        errors.append(
+                            f"{child_path} must not remove reserved org automation "
+                            f"labels: {', '.join(removed)}"
+                        )
                 visit(child, child_path)
         elif isinstance(value, list):
             for index, child in enumerate(value):
@@ -211,6 +265,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ref", default="main")
     parser.add_argument(
         "--required-revision",
+        required=True,
         help="Exact org workflow commit every caller must use.",
     )
     return parser.parse_args()
@@ -232,8 +287,8 @@ def main() -> int:
         return 1
     try:
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        print(f"ERROR: cannot load adopter manifest: {error}", file=sys.stderr)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ERROR: cannot load adopter manifest: {exc}", file=sys.stderr)
         return 1
     repositories = manifest.get("repositories")
     if not isinstance(repositories, list) or not all(
@@ -264,24 +319,26 @@ def main() -> int:
     for repository in sorted(set(repositories)):
         try:
             workflow = read_remote_workflow(repository, args.ref)
-        except (subprocess.CalledProcessError, ValueError, UnicodeDecodeError) as error:
-            errors.append(f"{repository}: cannot read security-scan.yml at {args.ref}: {error}")
+        except (subprocess.CalledProcessError, ValueError, UnicodeDecodeError) as exc:
+            errors.append(
+                f"{repository}: cannot read security-scan.yml at {args.ref}: {exc}"
+            )
             continue
-        for error in validate_caller(workflow, args.required_revision):
-            errors.append(f"{repository}: {error}")
+        for validation_error in validate_caller(workflow, args.required_revision):
+            errors.append(f"{repository}: {validation_error}")
 
     for repository in sorted(set(renovate_repositories)):
         try:
             config = read_remote_file(repository, args.ref, "renovate.json")
-        except (subprocess.CalledProcessError, ValueError, UnicodeDecodeError) as error:
-            errors.append(f"{repository}: cannot read renovate.json at {args.ref}: {error}")
+        except (subprocess.CalledProcessError, ValueError, UnicodeDecodeError) as exc:
+            errors.append(f"{repository}: cannot read renovate.json at {args.ref}: {exc}")
             continue
-        for error in validate_renovate_config(config):
-            errors.append(f"{repository}: {error}")
+        for validation_error in validate_renovate_config(config):
+            errors.append(f"{repository}: {validation_error}")
 
     if errors:
-        for error in errors:
-            print(f"ERROR: {error}", file=sys.stderr)
+        for validation_error in errors:
+            print(f"ERROR: {validation_error}", file=sys.stderr)
         return 1
     print(
         f"Validated truthful Trivy adoption in {len(set(repositories))} repositories "

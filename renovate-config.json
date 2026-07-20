@@ -35,7 +35,7 @@
       "datasourceTemplate": "github-digest",
       "depNameTemplate": "FutureDevGuys/.github",
       "packageNameTemplate": "FutureDevGuys/.github",
-      "currentValueTemplate": "main",
+      "currentValueTemplate": "security-contract-v1",
       "autoReplaceStringTemplate": "    uses: FutureDevGuys/.github/.github/workflows/security-scan.yml@{{{newDigest}}}\\n    with:\\n      workflow_revision: \"{{{newDigest}}}\""
     },
     {

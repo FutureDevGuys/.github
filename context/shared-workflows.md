@@ -29,9 +29,11 @@ separate sweep is:
 - Major updates are visible manual PRs by default. Use repo-local policy only
   for exceptions that should remain dashboard-approved before a PR exists.
 - Repo-local `renovate.json` files should add only repo-local policy deltas.
-  They may label candidates but must not enable Renovate merging or select a
-  merge type/strategy; the scheduled adoption audit enforces that boundary for
-  every repository listed in `renovate_config_repositories`.
+  They may add domain and fail-closed block labels, but the org preset alone
+  assigns `automerge-candidate`. Local policy must not enable Renovate merging,
+  select a merge type/strategy, assign the candidate label, or remove reserved
+  block labels; the scheduled adoption audit enforces that boundary for every
+  repository listed in `renovate_config_repositories`.
 - Immutable `digest` and `pinDigest` updates do not inherit a release-age gate;
   non-immutable patch and minor updates retain their semantic cooldowns.
 
@@ -108,8 +110,7 @@ jobs:
 ```
 
 WHEN adopting the shared workflow THEN you SHALL replace both `<SHA>` values
-with the same exact commit SHA from the `.github` repository after that org
-commit exists.
+with the same exact commit at the protected `security-contract-v1` ref.
 
 You SHALL NOT add a job-level `if`, pass secrets, add another reusable-workflow
 input, widen either permissions block beyond `contents: read`, or filter
@@ -140,9 +141,11 @@ new commit. The org sweep merges that PR only after its identity, current-head
 caller, and repository-specific checks satisfy the automerge policy.
 
 The shared preset treats the `uses` SHA and `workflow_revision` as one
-`github-digest` dependency on the `.github` repository's `main` ref. Renovate
-updates both occurrences in one replacement; a one-sided update is rejected by
-the caller contract before it can appear green.
+`github-digest` dependency on the `.github` repository's
+`security-contract-v1` ref. Renovate updates both occurrences in one
+replacement; a one-sided update is rejected by the caller contract before it
+can appear green. Unrelated policy commits on `main` do not create Trivy caller
+updates.
 
 ## Security contract release
 
@@ -167,7 +170,9 @@ audit and evidence validator.
 
 ## Updating the Shared Workflow
 
-Edit in this repo (`.github`) → push to main → all callers receive Renovate PRs on the next cycle.
+Edit the closed bundle in this repo (`.github`) → merge it to `main` → advance
+`security-contract-v1` with the reviewed release plan → callers receive
+Renovate PRs on the next cycle.
 
 ## Design Decisions
 

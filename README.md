@@ -20,7 +20,10 @@ This repository is the shared automation home for `FutureDevGuys`.
 Repo-specific policy remains in each repository's own `renovate.json` (e.g.
 Docker image review rules, version pin managers, submodule pointer policy).
 Major updates are created as visible manual PRs with block labels; repo-local
-policy can opt individual migration-heavy classes into dashboard approval.
+policy can opt individual migration-heavy classes into dashboard approval and
+add fail-closed block labels. The org preset exclusively owns
+`automerge-candidate`; local policy cannot assign it or remove reserved block
+labels.
 
 Internal `FutureDevGuys` repos are covered by the central runner and normally
 do not need a local Renovate config. External consumers can opt in with:
@@ -57,6 +60,10 @@ truthful adopter of the exact checked-out org workflow revision.
 The scheduled adoption audit also reads every declared repo-local
 `renovate.json` and rejects direct Renovate automerge settings, preserving the
 separate sweep as the only automated merge executor.
+
+Trivy caller updates follow the protected `security-contract-v1` release ref,
+not the unrelated organization-policy `main` tip. The adoption audit resolves
+that ref to one exact commit and requires both caller pins to equal it.
 
 ## Required Actions secrets
 

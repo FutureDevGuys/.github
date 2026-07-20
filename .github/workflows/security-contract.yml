@@ -185,8 +185,18 @@ jobs:
       - name: Audit declared repository callers on main
         env:
           GH_TOKEN: ${{ secrets.SECURITY_AUDIT_TOKEN }}
-        run: >-
-          python3 .github/scripts/audit_security_scan_adoption.py
-          --manifest .github/security-scan-adopters.json
-          --ref main
-          --required-revision ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          policy_revision="$(
+            gh api \
+              repos/FutureDevGuys/.github/git/ref/heads/security-contract-v1 \
+              --jq 'select(.ref == "refs/heads/security-contract-v1" and .object.type == "commit") | .object.sha'
+          )"
+          if [[ ! "${policy_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "security-contract-v1 did not resolve to an exact commit." >&2
+            exit 1
+          fi
+          python3 .github/scripts/audit_security_scan_adoption.py \
+            --manifest .github/security-scan-adopters.json \
+            --ref main \
+            --required-revision "${policy_revision}"

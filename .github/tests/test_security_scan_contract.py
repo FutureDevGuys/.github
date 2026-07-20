@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -211,6 +213,14 @@ class ScanResultContractTests(unittest.TestCase):
 
 
 class CallerContractTests(unittest.TestCase):
+    def test_adoption_cli_requires_approved_release_revision(self):
+        with patch.object(sys, "argv", ["audit-security-scan-adoption"]), patch(
+            "sys.stderr", new_callable=io.StringIO
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                adoption.parse_args()
+        self.assertEqual(raised.exception.code, 2)
+
     def test_checked_in_caller_fixture_passes(self):
         fixture = REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
         self.assertEqual(adoption.validate_caller(fixture.read_text(encoding="utf-8")), [])
@@ -338,6 +348,41 @@ class CallerContractTests(unittest.TestCase):
             adoption.validate_caller(text),
         )
 
+    def test_duplicate_trivy_job_is_rejected(self):
+        fixture = REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
+        text = fixture.read_text(encoding="utf-8")
+        duplicate = text + (
+            "\n  trivy:\n"
+            "    if: false\n"
+            "    uses: FutureDevGuys/.github/.github/workflows/security-scan.yml@"
+            + "2" * 40
+            + "\n"
+        )
+        self.assertIn(
+            "caller jobs mapping must contain exactly one trivy job",
+            adoption.validate_caller(duplicate),
+        )
+
+    def test_extra_job_is_rejected(self):
+        fixture = REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
+        text = fixture.read_text(encoding="utf-8") + (
+            "\n  bypass:\n    runs-on: ubuntu-latest\n    steps: []\n"
+        )
+        self.assertIn(
+            "caller jobs mapping must contain exactly one trivy job",
+            adoption.validate_caller(text),
+        )
+
+    def test_duplicate_control_mapping_is_rejected(self):
+        fixture = REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
+        text = fixture.read_text(encoding="utf-8") + (
+            "\non:\n  pull_request:\n    paths-ignore: ['**']\n"
+        )
+        self.assertIn(
+            "caller must declare on, permissions, and jobs exactly once",
+            adoption.validate_caller(text),
+        )
+
 
 class LocalRenovateContractTests(unittest.TestCase):
     def test_label_only_local_config_passes(self):
@@ -347,9 +392,37 @@ class LocalRenovateContractTests(unittest.TestCase):
                 "packageRules": [
                     {
                         "automerge": False,
-                        "addLabels": ["automerge-candidate"],
+                        "addLabels": ["edge"],
                     }
                 ],
+            }
+        )
+        self.assertEqual(adoption.validate_renovate_config(text), [])
+
+    def test_local_config_cannot_assign_org_candidate_label(self):
+        errors = adoption.validate_renovate_config(
+            '{"packageRules": [{"addLabels": ["automerge-candidate"]}]}'
+        )
+        self.assertIn(
+            "renovate.packageRules[0].addLabels must not assign automerge-candidate; the org preset owns merge eligibility",
+            errors,
+        )
+
+    def test_local_config_cannot_remove_org_block_label(self):
+        errors = adoption.validate_renovate_config(
+            '{"packageRules": [{"removeLabels": ["migration-required"]}]}'
+        )
+        self.assertIn(
+            "renovate.packageRules[0].removeLabels must not remove reserved org automation labels: migration-required",
+            errors,
+        )
+
+    def test_local_config_can_add_fail_closed_block_labels(self):
+        text = json.dumps(
+            {
+                "packageRules": [
+                    {"addLabels": ["manual-review", "migration-required", "database"]}
+                ]
             }
         )
         self.assertEqual(adoption.validate_renovate_config(text), [])

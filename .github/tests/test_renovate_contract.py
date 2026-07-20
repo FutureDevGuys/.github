@@ -203,7 +203,7 @@ class RenovatePolicyTests(unittest.TestCase):
             if manager.get("depNameTemplate") == "FutureDevGuys/.github"
         )
         self.assertEqual(manager["datasourceTemplate"], "github-digest")
-        self.assertEqual(manager["currentValueTemplate"], "main")
+        self.assertEqual(manager["currentValueTemplate"], "security-contract-v1")
         self.assertEqual(manager["packageNameTemplate"], "FutureDevGuys/.github")
         pattern = manager["matchStrings"][0].replace(
             "(?<currentDigest>",
@@ -222,6 +222,30 @@ class RenovatePolicyTests(unittest.TestCase):
         updated = re.sub(pattern, replacement, fixture, count=1)
         self.assertEqual(updated.count("2" * 40), 2)
         self.assertNotIn("1" * 40, updated)
+
+    def test_adoption_audit_requires_the_path_scoped_release_revision(self):
+        workflow = (REPO_ROOT / ".github/workflows/security-contract.yml").read_text(
+            encoding="utf-8"
+        )
+        adoption_job = workflow.split("  adoption-audit:", 1)[1]
+        self.assertIn("git/ref/heads/security-contract-v1", adoption_job)
+        self.assertIn('--required-revision "${policy_revision}"', adoption_job)
+        self.assertNotIn("--required-revision ${{ github.sha }}", adoption_job)
+
+    def test_semantic_cooldowns_and_major_holds_are_explicit(self):
+        preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
+        rules = preset["packageRules"]
+        major = next(rule for rule in rules if rule.get("matchUpdateTypes") == ["major"])
+        self.assertFalse(major["automerge"])
+        self.assertTrue({"manual-review", "major"}.issubset(major["addLabels"]))
+
+        ordinary = next(
+            rule
+            for rule in rules
+            if rule.get("matchUpdateTypes") == ["minor", "patch", "pin", "pinDigest"]
+        )
+        self.assertEqual(ordinary["minimumReleaseAge"], "3 days")
+        self.assertEqual(ordinary["internalChecksFilter"], "strict")
 
     def test_renovate_only_labels_and_never_merges(self):
         preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
