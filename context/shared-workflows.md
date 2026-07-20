@@ -144,6 +144,27 @@ The shared preset treats the `uses` SHA and `workflow_revision` as one
 updates both occurrences in one replacement; a one-sided update is rejected by
 the caller contract before it can appear green.
 
+## Security contract release
+
+`security-contract-v1` is the path-scoped authority for the reusable scan
+runtime. Its manifest-closed bundle contains the reusable workflow and both
+receipt programs. The resolver rejects missing, extra, dynamically imported,
+non-blob, linked, gitlink, wrong-mode, or main/release byte-divergent members.
+
+The release audit verifies the immutable repository identity, exact release
+SHA, valid GitHub signature, ancestry from `main`, required signatures,
+administrator enforcement, linear history, and disabled force-push/deletion on
+both branches. It records required status checks as intentionally absent while
+Actions billing blocks job admission. WHEN runner admission is restored THEN
+you SHALL update the policy and tests before claiming any required check.
+
+The release helper separates planning from apply. Its digest binds the policy,
+`main`, resolved release commit, observed release ref, and ordered operations.
+Existing releases move only by a non-force fast-forward after protection is
+verified; first creation is followed immediately by protection and a retained
+postcondition receipt. The scheduled/manual workflow runs only the read-only
+audit and evidence validator.
+
 ## Updating the Shared Workflow
 
 Edit in this repo (`.github`) → push to main → all callers receive Renovate PRs on the next cycle.

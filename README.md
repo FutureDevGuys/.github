@@ -74,3 +74,36 @@ Actions can check out the exact private submodule gitlinks.
 
 An optional portable Docker runner can extend this preset at runtime. It should
 default to explicit repositories, not broad token autodiscovery.
+
+## Security contract release authority
+
+The reusable Trivy runtime is versioned by the protected
+`security-contract-v1` branch. `.github/security-contract-governance.json`
+declares the exact runtime bundle and protection contract;
+`.github/scripts/security_contract_governance.py` resolves the newest `main`
+commit that changed that closed bundle and audits its signed release ref,
+ancestry, and branch protections.
+
+The scheduled/manual `security-contract` workflow is read-only. It retains a
+digest-bound report and receipt, and fails when the release ref, signature,
+ancestry, bundle closure, or protection state drifts. Required status checks are
+explicitly modeled as intentionally absent while GitHub Actions billing refuses
+to start jobs; the repository does not claim that a non-running check is
+enforced.
+
+Release changes use an operator-reviewed plan:
+
+```bash
+python3 .github/scripts/security_contract_governance.py \
+  plan-release --main-ref origin/main --out /tmp/security-contract-release-plan.json
+python3 .github/scripts/security_contract_governance.py \
+  apply-release --plan /tmp/security-contract-release-plan.json \
+  --approve <plan-digest> --receipt /tmp/security-contract-release-receipt.json
+```
+
+The apply helper exact-sets protection, permits only a fast-forward of an
+existing release ref, and requires a successful remote postcondition audit.
+WHEN creating the release branch for the first time THEN you SHALL use this
+helper and retain its receipt. You SHALL NOT run the apply command from Actions,
+force the release ref, or configure required checks until GitHub can actually
+start and complete the named jobs.

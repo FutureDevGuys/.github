@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "repository": {
+    "full_name": "FutureDevGuys/.github",
+    "database_id": 1182030180,
+    "node_id": "R_kgDORnRZZA",
+    "default_branch": "main"
+  },
+  "release_branch": "security-contract-v1",
+  "bundle": {
+    "entrypoint": ".github/workflows/security-scan.yml",
+    "paths": {
+      ".github/scripts/build_scan_result.py": "100644",
+      ".github/scripts/validate_scan_result.py": "100644",
+      ".github/workflows/security-scan.yml": "100644"
+    },
+    "python_roots": [
+      ".github/scripts"
+    ]
+  },
+  "protection": {
+    "required_signatures": true,
+    "enforce_admins": true,
+    "required_linear_history": true,
+    "allow_force_pushes": false,
+    "allow_deletions": false,
+    "required_status_checks": {
+      "mode": "intentionally_absent",
+      "reason": "github_actions_billing_admission_blocked",
+      "contexts": []
+    }
+  }
+}

@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/automerge-policy.json"
       - ".github/renovate-config.js"
+      - ".github/security-contract-governance.json"
       - ".github/security-scan-adopters.json"
       - ".github/scripts/**"
       - ".github/tests/**"
@@ -16,6 +17,7 @@ on:
     paths:
       - ".github/automerge-policy.json"
       - ".github/renovate-config.js"
+      - ".github/security-contract-governance.json"
       - ".github/security-scan-adopters.json"
       - ".github/scripts/**"
       - ".github/tests/**"
@@ -52,6 +54,55 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Run receipt and caller contract fixtures
         run: python3 -m unittest discover -s .github/tests -p "test_*.py" -v
+
+  release-authority-audit:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require canonical main dispatch
+        env:
+          AUDIT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$AUDIT_REF" != "refs/heads/main" ]]; then
+            echo "Release-authority audit must run from refs/heads/main." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Audit signed release authority and branch protection
+        id: authority_audit
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/security_contract_governance.py
+          audit
+          --main-ref origin/main
+          --report security-contract-governance-report.json
+          --receipt security-contract-governance-receipt.json
+      - name: Retain release-authority evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: security-contract-governance
+          path: |
+            security-contract-governance-report.json
+            security-contract-governance-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate release-authority evidence
+        if: always()
+        run: >-
+          python3 .github/scripts/security_contract_governance.py
+          validate
+          --report security-contract-governance-report.json
+          --receipt security-contract-governance-receipt.json
 
   trivy-contract-smoke:
     runs-on: ubuntu-latest
