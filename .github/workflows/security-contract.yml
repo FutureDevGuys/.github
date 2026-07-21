@@ -80,6 +80,7 @@ jobs:
         run: >-
           python3 .github/scripts/audit_security_scan_adoption.py
           validate
+          --required-revision 1111111111111111111111111111111111111111
           --report security-scan-adoption-fixture-report.json
           --receipt security-scan-adoption-fixture-receipt.json
       - name: Retain fixture adoption evidence
@@ -235,6 +236,7 @@ jobs:
             echo "security-contract-v1 did not resolve to an exact commit." >&2
             exit 1
           fi
+          echo "policy_revision=${policy_revision}" >> "$GITHUB_OUTPUT"
           python3 .github/scripts/audit_security_scan_adoption.py \
             --manifest .github/security-scan-adopters.json \
             audit \
@@ -256,5 +258,6 @@ jobs:
         run: >-
           python3 .github/scripts/audit_security_scan_adoption.py
           validate
+          --required-revision "${{ steps.adoption_audit.outputs.policy_revision }}"
           --report security-scan-adoption-report.json
           --receipt security-scan-adoption-receipt.json

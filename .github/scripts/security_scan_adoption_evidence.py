@@ -22,6 +22,7 @@ from security_scan_adoption_contract import (
     canonical_findings,
     canonical_json,
     digest,
+    render_canonical_caller,
 )
 from security_scan_adoption_lifecycle import (
     PolicyError,
@@ -36,6 +37,9 @@ from security_scan_adoption_proof import (
 
 MAX_EVIDENCE_BYTES = 5 * 1024 * 1024
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parent.parent / "security-scan-adopters.json"
+DEFAULT_CALLER_TEMPLATE_PATH = (
+    Path(__file__).resolve().parent.parent / "tests/fixtures/security-scan-caller.yml"
+)
 
 
 def load_json_object(path: Path, label: str) -> dict[str, Any]:
@@ -73,6 +77,7 @@ def validate_evidence(
     report_path: Path,
     receipt_path: Path,
     policy_path: Path = DEFAULT_POLICY_PATH,
+    required_revision: str | None = None,
 ) -> list[str]:
     try:
         report = load_json_object(report_path, "adoption report")
@@ -94,6 +99,29 @@ def validate_evidence(
     if not isinstance(inputs, dict):
         errors.append("report inputs are missing")
         inputs = {}
+    observed_required_revision = inputs.get("required_revision")
+    canonical_caller_digest: str | None = None
+    if (
+        not isinstance(observed_required_revision, str)
+        or COMMIT_RE.fullmatch(observed_required_revision) is None
+    ):
+        errors.append("report required revision is not one exact commit SHA")
+    else:
+        try:
+            caller_template = DEFAULT_CALLER_TEMPLATE_PATH.read_text(encoding="utf-8")
+            canonical_caller_digest = digest(
+                render_canonical_caller(
+                    caller_template,
+                    observed_required_revision,
+                ).encode("utf-8")
+            )
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            errors.append(f"cannot render canonical security caller: {error}")
+    if required_revision is not None:
+        if COMMIT_RE.fullmatch(required_revision) is None:
+            errors.append("expected required revision is not one exact commit SHA")
+        elif observed_required_revision != required_revision:
+            errors.append("report required revision does not match workflow admission")
     if not isinstance(visibility, dict) or not isinstance(repositories, list):
         errors.append("report visibility or repositories are missing")
         visibility = {}
@@ -293,6 +321,19 @@ def validate_evidence(
                     or re.fullmatch(r"[0-9a-f]{64}", caller_digest) is None
                 ):
                     errors.append(f"{name} security caller digest is missing")
+                elif canonical_caller_digest is not None:
+                    canonical_finding = (
+                        "caller bytes must exactly match the approved organization artifact"
+                    )
+                    if caller_digest == canonical_caller_digest:
+                        if security_findings:
+                            errors.append(
+                                f"{name} canonical security caller has findings"
+                            )
+                    elif canonical_finding not in security_findings:
+                        errors.append(
+                            f"{name} noncanonical security caller lacks an exact finding"
+                        )
                 expected_scan_status = "fail" if security_findings else "pass"
             elif state == "absent":
                 if caller_digest is not None:

@@ -13,7 +13,8 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 REPORT_SCHEMA_VERSION = 2
 RECEIPT_SCHEMA_VERSION = 2
 TOOL_NAME = "security-scan-adoption-audit"
-TOOL_VERSION = "2.1.0"
+TOOL_VERSION = "2.2.0"
+CALLER_REVISION_PLACEHOLDER = "1" * 40
 
 
 def canonical_json(value: Any) -> bytes:
@@ -28,3 +29,13 @@ def canonical_findings(values: list[str]) -> list[str]:
     """Return the stable, duplicate-free finding order used by evidence."""
 
     return sorted(set(values))
+
+
+def render_canonical_caller(template: str, revision: str) -> str:
+    """Render the immutable caller fixture at one exact workflow revision."""
+
+    if COMMIT_RE.fullmatch(revision) is None:
+        raise ValueError("canonical caller revision must be one exact commit SHA")
+    if template.count(CALLER_REVISION_PLACEHOLDER) != 2:
+        raise ValueError("canonical caller template must contain two revision pins")
+    return template.replace(CALLER_REVISION_PLACEHOLDER, revision)

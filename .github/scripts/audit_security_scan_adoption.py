@@ -32,6 +32,7 @@ from security_scan_adoption_contract import (  # noqa: E402
     canonical_findings,
     canonical_json,
     digest,
+    render_canonical_caller,
 )
 from security_scan_adoption_evidence import validate_evidence  # noqa: E402
 from security_scan_adoption_lifecycle import (  # noqa: E402
@@ -137,13 +138,11 @@ def validate_read_only_permissions(
 
 
 def canonical_caller(revision: str) -> str:
-    if COMMIT_RE.fullmatch(revision) is None:
-        raise AdoptionError("canonical caller revision must be one exact commit SHA")
     template = CALLER_TEMPLATE.read_text(encoding="utf-8")
-    placeholder = "1" * 40
-    if template.count(placeholder) != 2:
-        raise AdoptionError("canonical caller template must contain two revision pins")
-    return template.replace(placeholder, revision)
+    try:
+        return render_canonical_caller(template, revision)
+    except ValueError as error:
+        raise AdoptionError(str(error)) from error
 
 
 def validate_caller(text: str, required_revision: str | None = None) -> list[str]:
@@ -952,6 +951,7 @@ def parse_args() -> argparse.Namespace:
     audit.add_argument("--report", type=Path, required=True)
     audit.add_argument("--receipt", type=Path, required=True)
     validate = commands.add_parser("validate")
+    validate.add_argument("--required-revision", required=True)
     validate.add_argument("--report", type=Path, required=True)
     validate.add_argument("--receipt", type=Path, required=True)
     return parser.parse_args()
@@ -961,7 +961,12 @@ def main() -> int:
     args = parse_args()
     try:
         if args.command == "validate":
-            errors = validate_evidence(args.report, args.receipt, args.manifest)
+            errors = validate_evidence(
+                args.report,
+                args.receipt,
+                args.manifest,
+                args.required_revision,
+            )
             for error in errors:
                 print(f"ERROR: {error}", file=sys.stderr)
             return 1 if errors else 0

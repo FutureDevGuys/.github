@@ -638,6 +638,7 @@ class AdoptionWorkflowContractTests(unittest.TestCase):
         self.assertIn("if-no-files-found: error", fixture_job)
         self.assertNotIn("SECURITY_AUDIT_TOKEN", fixture_job)
         self.assertNotIn("GH_TOKEN", fixture_job)
+        self.assertIn("--required-revision 1111111111111111111111111111111111111111", fixture_job)
 
     def test_live_audit_is_held_to_schedule_or_dispatch_and_retains_failures(self):
         live_job = adoption.indented_block(self.workflow, "adoption-audit", 2)
@@ -652,6 +653,14 @@ class AdoptionWorkflowContractTests(unittest.TestCase):
         self.assertIn("if: always()", live_job)
         self.assertIn("security-scan-adoption-receipt.json", live_job)
         self.assertIn("if-no-files-found: error", live_job)
+        self.assertIn(
+            'echo "policy_revision=${policy_revision}" >> "$GITHUB_OUTPUT"',
+            live_job,
+        )
+        self.assertIn(
+            '--required-revision "${{ steps.adoption_audit.outputs.policy_revision }}"',
+            live_job,
+        )
 
 
 class AdoptionInventoryTests(unittest.TestCase):
@@ -964,6 +973,18 @@ class AdoptionInventoryTests(unittest.TestCase):
             self.validate_rebuilt(scan_tamper),
         )
 
+        caller_digest_tamper = json.loads(json.dumps(base))
+        caller_digest_row = next(
+            row
+            for row in caller_digest_tamper["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        caller_digest_row["security_scan_caller"]["sha256"] = "a" * 64
+        self.assertIn(
+            "FutureDevGuys/shellrc.d noncanonical security caller lacks an exact finding",
+            self.validate_rebuilt(caller_digest_tamper),
+        )
+
         proof_tamper = json.loads(json.dumps(base))
         proof_row = next(
             row
@@ -1000,6 +1021,33 @@ class AdoptionInventoryTests(unittest.TestCase):
             "FutureDevGuys/shellrc.d lifecycle does not match policy and inventory",
             self.validate_rebuilt(report),
         )
+
+    def test_required_revision_is_exact_and_bound_to_workflow_admission(self):
+        report = self.audit()
+        report["inputs"]["required_revision"] = "main"
+        self.assertIn(
+            "report required revision is not one exact commit SHA",
+            self.validate_rebuilt(report),
+        )
+
+        clean = self.audit()
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "adoption-report.json"
+            receipt_path = Path(temporary) / "adoption-receipt.json"
+            adoption.write_atomic(report_path, clean)
+            adoption.write_atomic(
+                receipt_path,
+                adoption.build_receipt(report_path, clean),
+            )
+            self.assertIn(
+                "report required revision does not match workflow admission",
+                adoption_evidence.validate_evidence(
+                    report_path,
+                    receipt_path,
+                    self.policy,
+                    "2" * 40,
+                ),
+            )
 
     def test_non_active_status_and_proof_tampering_is_rejected(self):
         for lifecycle in ("authority", "archived"):
