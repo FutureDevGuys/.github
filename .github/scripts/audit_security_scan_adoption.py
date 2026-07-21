@@ -575,6 +575,24 @@ class GitHubProvider:
             ) from error
 
 
+def live_provider(credential_source: str) -> GitHubProvider:
+    """Select one explicit live credential authority without weakening CI."""
+
+    if credential_source == "token":
+        if not os.environ.get("GH_TOKEN", "").strip():
+            raise AdoptionError(
+                "GH_TOKEN is required for token-backed live organization discovery"
+            )
+    elif credential_source == "gh-session":
+        if os.environ.get("GITHUB_ACTIONS", "").strip().casefold() == "true":
+            raise AdoptionError(
+                "gh-session credential discovery is forbidden in GitHub Actions"
+            )
+    else:
+        raise AdoptionError("live credential source is unsupported")
+    return GitHubProvider()
+
+
 class FixtureProvider:
     def __init__(self, path: Path) -> None:
         fixture = load_json_object(path, "adoption fixture")
@@ -689,9 +707,12 @@ def audit_adoption(
     policy_path: Path,
     required_revision: str,
     shared_preset_path: Path,
+    credential_source: str = "fixture",
 ) -> dict[str, Any]:
     if COMMIT_RE.fullmatch(required_revision) is None:
         raise AdoptionError("required revision must be one exact commit SHA")
+    if credential_source not in {"token", "gh-session", "fixture"}:
+        raise AdoptionError("audit credential source is unsupported")
     try:
         policy = validate_policy(load_json_object(policy_path, "adoption policy"))
     except PolicyError as error:
@@ -876,6 +897,7 @@ def audit_adoption(
             "sha256": digest(policy_path.read_bytes()),
         },
         "inputs": {
+            "credential_source": credential_source,
             "required_revision": required_revision,
             "shared_preset_sha256": digest(shared_preset_text.encode("utf-8")),
             "active_revisions_sha256": digest(active_revisions_bytes),
@@ -915,6 +937,7 @@ def build_receipt(report_path: Path, report: dict[str, Any]) -> dict[str, Any]:
         "executed": True,
         "tool": report["tool"],
         "inputs": {
+            "credential_source": report["inputs"]["credential_source"],
             "policy_sha256": report["policy"]["sha256"],
             "required_revision": report["inputs"]["required_revision"],
             "shared_preset_sha256": report["inputs"]["shared_preset_sha256"],
@@ -948,6 +971,15 @@ def parse_args() -> argparse.Namespace:
     audit = commands.add_parser("audit")
     audit.add_argument("--required-revision", required=True)
     audit.add_argument("--inventory-fixture", type=Path)
+    audit.add_argument(
+        "--credential-source",
+        choices=("token", "gh-session"),
+        default="token",
+        help=(
+            "live API credential authority; gh-session is local-only and "
+            "forbidden in GitHub Actions"
+        ),
+    )
     audit.add_argument("--report", type=Path, required=True)
     audit.add_argument("--receipt", type=Path, required=True)
     validate = commands.add_parser("validate")
@@ -971,11 +1003,7 @@ def main() -> int:
                 print(f"ERROR: {error}", file=sys.stderr)
             return 1 if errors else 0
         if args.inventory_fixture is None:
-            if not os.environ.get("GH_TOKEN", "").strip():
-                raise AdoptionError(
-                    "GH_TOKEN is required for live paginated organization discovery"
-                )
-            provider: InventoryProvider = GitHubProvider()
+            provider: InventoryProvider = live_provider(args.credential_source)
         else:
             provider = FixtureProvider(args.inventory_fixture)
         report = audit_adoption(
@@ -983,6 +1011,7 @@ def main() -> int:
             args.manifest,
             args.required_revision,
             args.shared_preset,
+            args.credential_source if args.inventory_fixture is None else "fixture",
         )
         write_atomic(args.report, report)
         write_atomic(args.receipt, build_receipt(args.report, report))

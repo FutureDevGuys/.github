@@ -180,6 +180,25 @@ verified; first creation is followed immediately by protection and a retained
 postcondition receipt. The scheduled/manual workflow runs only the read-only
 audit and evidence validator.
 
+An operator can run the same paginated live audit locally through the already
+authenticated GitHub CLI without exporting or copying a token:
+
+```bash
+policy_revision="$(gh api repos/FutureDevGuys/.github/git/ref/heads/security-contract-v1 --jq '.object.sha')"
+python3 .github/scripts/audit_security_scan_adoption.py audit \
+  --credential-source gh-session \
+  --required-revision "${policy_revision}" \
+  --report security-scan-adoption-report.json \
+  --receipt security-scan-adoption-receipt.json
+```
+
+`gh-session` is explicitly rejected inside GitHub Actions. Scheduled and manual
+workflow runs continue to require the dedicated, least-privilege
+`SECURITY_AUDIT_TOKEN`; a developer login is not an implicit CI credential.
+The report and receipt bind `credential_source` as `token`, `gh-session`, or
+`fixture`, so locally produced evidence cannot be mistaken for the hosted
+least-privilege audit.
+
 ## Updating the Shared Workflow
 
 Edit the closed bundle in this repo (`.github`) → merge it to `main` → advance

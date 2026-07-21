@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -227,6 +228,45 @@ class CallerContractTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as raised:
                 adoption.parse_args()
         self.assertEqual(raised.exception.code, 2)
+
+    def test_live_adoption_defaults_to_explicit_token_authority(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(
+                adoption.AdoptionError,
+                "GH_TOKEN is required for token-backed live organization discovery",
+            ):
+                adoption.live_provider("token")
+
+    def test_local_gh_session_is_forbidden_in_github_actions(self):
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}, clear=True):
+            with self.assertRaisesRegex(
+                adoption.AdoptionError,
+                "gh-session credential discovery is forbidden in GitHub Actions",
+            ):
+                adoption.live_provider("gh-session")
+
+    def test_local_gh_session_selects_live_provider_outside_actions(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsInstance(
+                adoption.live_provider("gh-session"), adoption.GitHubProvider
+            )
+
+    def test_adoption_cli_accepts_explicit_local_gh_session(self):
+        argv = [
+            "audit-security-scan-adoption",
+            "audit",
+            "--required-revision",
+            "1" * 40,
+            "--credential-source",
+            "gh-session",
+            "--report",
+            "report.json",
+            "--receipt",
+            "receipt.json",
+        ]
+        with patch.object(sys, "argv", argv):
+            args = adoption.parse_args()
+        self.assertEqual(args.credential_source, "gh-session")
 
     def test_checked_in_caller_fixture_passes(self):
         fixture = REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
@@ -677,6 +717,37 @@ class AdoptionInventoryTests(unittest.TestCase):
             "1" * 40,
             REPO_ROOT / "renovate-config.json",
         )
+
+    def test_fixture_audit_binds_credential_authority(self):
+        report = self.audit()
+        self.assertEqual(report["inputs"]["credential_source"], "fixture")
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "adoption-report.json"
+            receipt_path = Path(temporary) / "adoption-receipt.json"
+            adoption.write_atomic(report_path, report)
+            receipt = adoption.build_receipt(report_path, report)
+            self.assertEqual(receipt["inputs"]["credential_source"], "fixture")
+
+    def test_unknown_credential_authority_fails_evidence_validation(self):
+        report = self.audit()
+        report["inputs"]["credential_source"] = "ambient"
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "adoption-report.json"
+            receipt_path = Path(temporary) / "adoption-receipt.json"
+            adoption.write_atomic(report_path, report)
+            adoption.write_atomic(
+                receipt_path,
+                adoption.build_receipt(report_path, report),
+            )
+            self.assertIn(
+                "report credential source is invalid",
+                adoption_evidence.validate_evidence(
+                    report_path,
+                    receipt_path,
+                    self.policy,
+                    "1" * 40,
+                ),
+            )
 
     def audit_with_files(self, files: dict[str, str]):
         fixture = json.loads(self.fixture.read_text(encoding="utf-8"))

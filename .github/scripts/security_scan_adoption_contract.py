@@ -10,10 +10,10 @@ from typing import Any
 
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-REPORT_SCHEMA_VERSION = 2
-RECEIPT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
+RECEIPT_SCHEMA_VERSION = 3
 TOOL_NAME = "security-scan-adoption-audit"
-TOOL_VERSION = "2.2.0"
+TOOL_VERSION = "2.3.0"
 CALLER_REVISION_PLACEHOLDER = "1" * 40
 
 

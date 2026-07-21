@@ -99,6 +99,9 @@ def validate_evidence(
     if not isinstance(inputs, dict):
         errors.append("report inputs are missing")
         inputs = {}
+    credential_source = inputs.get("credential_source")
+    if credential_source not in {"token", "gh-session", "fixture"}:
+        errors.append("report credential source is invalid")
     observed_required_revision = inputs.get("required_revision")
     canonical_caller_digest: str | None = None
     if (
@@ -453,6 +456,7 @@ def validate_evidence(
     }:
         errors.append("report policy binding does not match lifecycle authority")
     expected_inputs = {
+        "credential_source": credential_source,
         "policy_sha256": report_policy.get("sha256")
         if isinstance(report_policy, dict)
         else None,
