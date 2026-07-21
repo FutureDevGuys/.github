@@ -14,6 +14,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# renovate: datasource=docker depName=renovate/renovate
+EXPECTED_RENOVATE_RUNTIME = "43.263.3@sha256:dbdb501ad9a2558ab8f99538b1d4be0a8768cf8c3383aaa33a35ed981dfe3464"
+
 
 def load_module(name: str, relative_path: str):
     path = REPO_ROOT / relative_path
@@ -46,6 +49,10 @@ merge_postcondition = load_module(
 repository_visibility = load_module(
     "validate_automerge_repository_visibility",
     ".github/scripts/validate_automerge_repository_visibility.py",
+)
+activation = load_module(
+    "validate_automerge_activation",
+    ".github/scripts/validate_automerge_activation.py",
 )
 
 
@@ -109,10 +116,7 @@ class RenovatePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime_pins,
-            [
-                "43.263.3@sha256:dbdb501ad9a2558ab8f99538b1d4be0a8768cf8c3383aaa33a35ed981dfe3464",
-                "43.263.3@sha256:dbdb501ad9a2558ab8f99538b1d4be0a8768cf8c3383aaa33a35ed981dfe3464",
-            ],
+            [EXPECTED_RENOVATE_RUNTIME, EXPECTED_RENOVATE_RUNTIME],
         )
         self.assertEqual(
             workflow.count("# renovate: datasource=docker depName=renovate/renovate"),
@@ -123,6 +127,66 @@ class RenovatePolicyTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("repos/FutureDevGuys/.github/contents/renovate-config.json", workflow)
+
+    def test_runtime_update_includes_its_test_oracle_in_one_dependency(self):
+        preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
+        manager = next(
+            item
+            for item in preset["customManagers"]
+            if "test oracle" in item.get("description", "")
+        )
+        self.assertEqual(
+            manager["managerFilePatterns"],
+            [
+                "/^\\.github/workflows/renovate\\.yml$/",
+                "/^\\.github/tests/test_renovate_contract\\.py$/",
+            ],
+        )
+        workflow = (REPO_ROOT / ".github/workflows/renovate.yml").read_text(
+            encoding="utf-8"
+        )
+        test_source = Path(__file__).read_text(encoding="utf-8")
+        matches: list[tuple[str, str]] = []
+        for source in (workflow, test_source):
+            for pattern in manager["matchStrings"]:
+                normalized = (
+                    pattern.replace("(?<datasource>", "(?P<datasource>")
+                    .replace("(?<depName>", "(?P<depName>")
+                    .replace("(?<currentValue>", "(?P<currentValue>")
+                    .replace("(?<currentDigest>", "(?P<currentDigest>")
+                )
+                for match in re.finditer(normalized, source):
+                    matches.append(
+                        (
+                            match.group("currentValue"),
+                            match.group("currentDigest"),
+                        )
+                    )
+        self.assertEqual(len(matches), 3)
+        self.assertEqual(len(set(matches)), 1)
+        self.assertEqual("@".join(matches[0]), EXPECTED_RENOVATE_RUNTIME)
+
+        replacement = "99.88.77@sha256:" + "a" * 64
+        updated_sources: list[str] = []
+        for source in (workflow, test_source):
+            updated = source
+            for pattern in manager["matchStrings"]:
+                normalized = (
+                    pattern.replace("(?<datasource>", "(?P<datasource>")
+                    .replace("(?<depName>", "(?P<depName>")
+                    .replace("(?<currentValue>", "(?P<currentValue>")
+                    .replace("(?<currentDigest>", "(?P<currentDigest>")
+                )
+                updated = re.sub(
+                    normalized,
+                    lambda match: match.group(0)
+                    .replace(match.group("currentValue"), replacement.split("@", 1)[0])
+                    .replace(match.group("currentDigest"), replacement.split("@", 1)[1]),
+                    updated,
+                )
+            updated_sources.append(updated)
+        self.assertEqual(sum(source.count(replacement) for source in updated_sources), 3)
+        self.assertNotIn(EXPECTED_RENOVATE_RUNTIME, "".join(updated_sources))
 
     def test_runtime_config_rejects_mutable_shared_preset(self):
         command = [
@@ -164,6 +228,27 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertNotEqual(mutable.returncode, 0)
         self.assertIn("exact 40-character commit SHA", mutable.stderr)
 
+    def test_runtime_uses_only_the_canonical_repository_config_path(self):
+        env = {
+            **os.environ,
+            "RENOVATE_CONFIG_PRESET": (
+                "github>FutureDevGuys/.github:renovate-config#" + "1" * 40
+            ),
+        }
+        completed = subprocess.run(
+            [
+                "node",
+                "-e",
+                "process.stdout.write(JSON.stringify(require('./.github/renovate-config.js').configFileNames))",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(json.loads(completed.stdout), ["renovate.json"])
+
     def test_runtime_force_disables_renovate_merge_execution(self):
         env = {
             **os.environ,
@@ -203,7 +288,7 @@ class RenovatePolicyTests(unittest.TestCase):
             if manager.get("depNameTemplate") == "FutureDevGuys/.github"
         )
         self.assertEqual(manager["datasourceTemplate"], "github-digest")
-        self.assertEqual(manager["currentValueTemplate"], "main")
+        self.assertEqual(manager["currentValueTemplate"], "security-contract-v1")
         self.assertEqual(manager["packageNameTemplate"], "FutureDevGuys/.github")
         pattern = manager["matchStrings"][0].replace(
             "(?<currentDigest>",
@@ -222,6 +307,48 @@ class RenovatePolicyTests(unittest.TestCase):
         updated = re.sub(pattern, replacement, fixture, count=1)
         self.assertEqual(updated.count("2" * 40), 2)
         self.assertNotIn("1" * 40, updated)
+
+    def test_adoption_audit_requires_the_path_scoped_release_revision(self):
+        workflow = (REPO_ROOT / ".github/workflows/security-contract.yml").read_text(
+            encoding="utf-8"
+        )
+        adoption_job = workflow.split("  adoption-audit:", 1)[1]
+        self.assertIn("git/ref/heads/security-contract-v1", adoption_job)
+        self.assertIn('--required-revision "${policy_revision}"', adoption_job)
+        self.assertNotIn("--required-revision ${{ github.sha }}", adoption_job)
+
+    def test_automerge_uses_the_approved_immutable_release_revision(self):
+        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertEqual(workflow.count("audit-approved-release"), 2)
+        self.assertIn('--expected-revision "${security_contract_revision}"', workflow)
+        self.assertEqual(
+            workflow.count(
+                '--required-security-revision "${security_contract_revision}"'
+            ),
+            2,
+        )
+        self.assertNotIn('org_revision="$(git rev-parse HEAD)"', workflow)
+        self.assertNotIn("--main-ref", workflow)
+        self.assertIn("security-contract-approved-release.json", workflow)
+        self.assertIn("security-contract-approved-release-receipt.json", workflow)
+
+    def test_semantic_cooldowns_and_major_holds_are_explicit(self):
+        preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
+        rules = preset["packageRules"]
+        major = next(rule for rule in rules if rule.get("matchUpdateTypes") == ["major"])
+        self.assertFalse(major["automerge"])
+        self.assertTrue({"manual-review", "major"}.issubset(major["addLabels"]))
+
+        ordinary = next(
+            rule
+            for rule in rules
+            if rule.get("matchUpdateTypes") == ["minor", "patch", "pin", "pinDigest"]
+        )
+        self.assertEqual(ordinary["minimumReleaseAge"], "3 days")
+        self.assertEqual(ordinary["internalChecksFilter"], "strict")
 
     def test_renovate_only_labels_and_never_merges(self):
         preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
@@ -265,18 +392,18 @@ class RenovatePolicyTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(set(policy["repositories"]), set(adopters["repositories"]))
+        self.assertEqual(adopters["default_lifecycle"], "active")
+        self.assertEqual(adopters["schema_version"], 2)
         self.assertEqual(
-            set(adopters["renovate_config_repositories"]),
-            {
-                "FutureDevGuys/docker-configs",
-                "FutureDevGuys/homelab-iac",
-                "FutureDevGuys/personal-containers",
-            },
+            adopters["lifecycle_overrides"]["FutureDevGuys/.github"]["lifecycle"],
+            "authority",
         )
-        self.assertLessEqual(
-            set(adopters["renovate_config_repositories"]),
-            set(adopters["repositories"]),
+        self.assertEqual(
+            adopters["lifecycle_overrides"]["FutureDevGuys/openclaw"]["lifecycle"],
+            "archived",
+        )
+        self.assertTrue(
+            set(policy["repositories"]).isdisjoint(adopters["lifecycle_overrides"])
         )
         for repository in policy["repositories"].values():
             self.assertIsInstance(repository["repository_id"], int)
@@ -291,6 +418,25 @@ class RenovatePolicyTests(unittest.TestCase):
             ]
         }
         self.assertIn("contract-and-history", docker_names)
+
+    def test_automerge_is_source_kill_switched_until_external_guards_exist(self):
+        policy = activation.load_policy(
+            REPO_ROOT / ".github/automerge-activation.json"
+        )
+        self.assertFalse(policy["enabled"])
+        self.assertTrue(policy["kill_switch"])
+        self.assertFalse(
+            policy["required_preconditions"]["merge_serialization"][
+                "head_compare_and_swap_is_sufficient"
+            ]
+        )
+        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("needs: activation", workflow)
+        self.assertIn("if: needs.activation.outputs.enabled == 'true'", workflow)
+        self.assertIn("Validate explicit automerge kill switch", workflow)
+        self.assertNotIn("workflow_dispatch", workflow)
 
 
 class AutomergeRepositoryVisibilityTests(unittest.TestCase):

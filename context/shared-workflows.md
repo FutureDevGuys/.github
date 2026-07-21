@@ -29,9 +29,13 @@ separate sweep is:
 - Major updates are visible manual PRs by default. Use repo-local policy only
   for exceptions that should remain dashboard-approved before a PR exists.
 - Repo-local `renovate.json` files should add only repo-local policy deltas.
-  They may label candidates but must not enable Renovate merging or select a
-  merge type/strategy; the scheduled adoption audit enforces that boundary for
-  every repository listed in `renovate_config_repositories`.
+  They may add domain and fail-closed block labels, but the org preset alone
+  assigns `automerge-candidate`. Local policy must not enable Renovate merging,
+  select a merge type/strategy, assign the candidate label, or remove reserved
+  block labels; the scheduled adoption audit enforces that boundary for every
+  active repository discovered from the complete paginated organization
+  inventory. Local `extends`, `globalExtends`, and `ignorePresets` cannot widen
+  or replace the reviewed organization preset.
 - Immutable `digest` and `pinDigest` updates do not inherit a release-age gate;
   non-immutable patch and minor updates retain their semantic cooldowns.
 
@@ -43,9 +47,12 @@ candidate skip reason and PR age. An aged actionable blocker with zero eligible
 or merged progress marks the run degraded; policy-blocked manual work is
 reported but does not count as an actionable blocker.
 
-The automerge sweep uses squash merges and deletes merged Renovate branches. The
-org repositories are configured to allow squash merges only, so manual PR merges
-use the same history shape as the automation.
+The automerge sweep's mutating job is currently source-kill-switched. Its future
+path uses squash merges and deletes merged Renovate branches, but it cannot run
+until main enforces the named checks, one approval, and conversation resolution;
+refresh and merge use distinct dedicated GitHub Apps; and a merge queue or
+equivalent server-enforced serialization exists. Exact-head comparison remains
+one race guard and is not claimed as atomic serialization.
 
 `.github/automerge-policy.json` is the fail-closed identity and required-check
 contract. A candidate must have the exact trusted Renovate principal, the
@@ -108,8 +115,7 @@ jobs:
 ```
 
 WHEN adopting the shared workflow THEN you SHALL replace both `<SHA>` values
-with the same exact commit SHA from the `.github` repository after that org
-commit exists.
+with the same exact commit at the protected `security-contract-v1` ref.
 
 You SHALL NOT add a job-level `if`, pass secrets, add another reusable-workflow
 input, widen either permissions block beyond `contents: read`, or filter
@@ -140,13 +146,64 @@ new commit. The org sweep merges that PR only after its identity, current-head
 caller, and repository-specific checks satisfy the automerge policy.
 
 The shared preset treats the `uses` SHA and `workflow_revision` as one
-`github-digest` dependency on the `.github` repository's `main` ref. Renovate
-updates both occurrences in one replacement; a one-sided update is rejected by
-the caller contract before it can appear green.
+`github-digest` dependency on the `.github` repository's
+`security-contract-v1` ref. Renovate updates both occurrences in one
+replacement; a one-sided update is rejected by the caller contract before it
+can appear green. Unrelated policy commits on `main` do not create Trivy caller
+updates.
+
+## Security contract release
+
+`security-contract-v1` is the path-scoped authority for the reusable scan
+runtime. Its manifest-closed bundle contains the reusable workflow and both
+receipt programs. The resolver rejects missing, extra, dynamically imported,
+non-blob, linked, gitlink, wrong-mode, or main/release byte-divergent members.
+
+The release audit verifies the immutable repository identity, exact release
+SHA, valid GitHub signature, ancestry from `main`, required signatures,
+administrator enforcement, linear history, and disabled force-push/deletion on
+both branches. Current status checks and reviews are absent, so the policy names
+the exact activation-held future contexts and automerge stays source-disabled.
+WHEN those protections are enforceable THEN you SHALL advance the policy and
+activation gate together before claiming automerge readiness.
+
+The automerge sweep uses the same governance policy but resolves bundle bytes
+directly at the protected release SHA. It audits that authority before examining
+candidates and again immediately before a merge, with the initially approved
+SHA as an exact postcondition. It does not substitute the current `main` or the
+workflow checkout SHA for the caller's required security revision.
+
+The release helper separates planning from apply. Its digest binds the policy,
+`main`, resolved release commit, observed release ref, and ordered operations.
+Existing releases move only by a non-force fast-forward after protection is
+verified; first creation is followed immediately by protection and a retained
+postcondition receipt. The scheduled/manual workflow runs only the read-only
+audit and evidence validator.
+
+An operator can run the same paginated live audit locally through the already
+authenticated GitHub CLI without exporting or copying a token:
+
+```bash
+policy_revision="$(gh api repos/FutureDevGuys/.github/git/ref/heads/security-contract-v1 --jq '.object.sha')"
+python3 .github/scripts/audit_security_scan_adoption.py audit \
+  --credential-source gh-session \
+  --required-revision "${policy_revision}" \
+  --report security-scan-adoption-report.json \
+  --receipt security-scan-adoption-receipt.json
+```
+
+`gh-session` is explicitly rejected inside GitHub Actions. Scheduled and manual
+workflow runs continue to require the dedicated, least-privilege
+`SECURITY_AUDIT_TOKEN`; a developer login is not an implicit CI credential.
+The report and receipt bind `credential_source` as `token`, `gh-session`, or
+`fixture`, so locally produced evidence cannot be mistaken for the hosted
+least-privilege audit.
 
 ## Updating the Shared Workflow
 
-Edit in this repo (`.github`) → push to main → all callers receive Renovate PRs on the next cycle.
+Edit the closed bundle in this repo (`.github`) → merge it to `main` → advance
+`security-contract-v1` with the reviewed release plan → callers receive
+Renovate PRs on the next cycle.
 
 ## Design Decisions
 

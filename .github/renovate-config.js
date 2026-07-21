@@ -42,6 +42,7 @@ const config = {
   endpoint: process.env.RENOVATE_ENDPOINT || 'https://api.github.com',
   onboarding: false,
   requireConfig: 'optional',
+  configFileNames: ['renovate.json'],
   globalExtends: [
     preset,
   ],

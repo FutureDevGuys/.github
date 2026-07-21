@@ -1,14 +1,35 @@
 {
-  "schema_version": 1,
-  "repositories": [
-    "FutureDevGuys/docker-configs",
-    "FutureDevGuys/homelab-iac",
-    "FutureDevGuys/personal-containers",
-    "FutureDevGuys/system-config"
-  ],
-  "renovate_config_repositories": [
-    "FutureDevGuys/docker-configs",
-    "FutureDevGuys/homelab-iac",
-    "FutureDevGuys/personal-containers"
-  ]
+  "schema_version": 2,
+  "organization": {
+    "login": "FutureDevGuys",
+    "id": 221667046,
+    "node_id": "O_kgDODTZe5g"
+  },
+  "default_lifecycle": "active",
+  "lifecycle_overrides": {
+    "FutureDevGuys/.github": {
+      "repository_id": 1182030180,
+      "node_id": "R_kgDORnRZZA",
+      "lifecycle": "authority"
+    },
+    "FutureDevGuys/openclaw": {
+      "repository_id": 1171059273,
+      "node_id": "R_kgDORczySQ",
+      "lifecycle": "archived"
+    }
+  },
+  "requirements": {
+    "active": {
+      "security_scan": "required",
+      "renovate_config": "validate_if_present"
+    },
+    "authority": {
+      "security_scan": "provider",
+      "renovate_config": "not_applicable"
+    },
+    "archived": {
+      "security_scan": "not_applicable",
+      "renovate_config": "not_applicable"
+    }
+  }
 }

@@ -1,0 +1,60 @@
+{
+  "repository": {
+    "archived": false,
+    "default_branch": "main",
+    "disabled": false,
+    "full_name": "FutureDevGuys/.github",
+    "id": 1182030180,
+    "node_id": "R_kgDORnRZZA"
+  },
+  "release_ref": {
+    "object": {
+      "sha": "032d7dc24158b3c7fe52c393028b71d5c030ffdd",
+      "type": "commit"
+    },
+    "ref": "refs/heads/security-contract-v1"
+  },
+  "main_ref": {
+    "object": {
+      "sha": "759cc2c9c28a1e08f0503ff8692a3531207409c0",
+      "type": "commit"
+    },
+    "ref": "refs/heads/main"
+  },
+  "release_commit": {
+    "commit": {
+      "verification": {
+        "reason": "valid",
+        "verified": true
+      }
+    },
+    "sha": "032d7dc24158b3c7fe52c393028b71d5c030ffdd"
+  },
+  "ancestry": {
+    "base_commit": {
+      "sha": "032d7dc24158b3c7fe52c393028b71d5c030ffdd"
+    },
+    "merge_base_commit": {
+      "sha": "032d7dc24158b3c7fe52c393028b71d5c030ffdd"
+    },
+    "status": "ahead"
+  },
+  "protection": {
+    "allow_deletions": {
+      "enabled": false
+    },
+    "allow_force_pushes": {
+      "enabled": false
+    },
+    "enforce_admins": {
+      "enabled": true
+    },
+    "required_linear_history": {
+      "enabled": true
+    },
+    "required_status_checks": null
+  },
+  "required_signatures": {
+    "enabled": true
+  }
+}
