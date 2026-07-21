@@ -278,6 +278,28 @@ class CallerContractTests(unittest.TestCase):
             adoption.validate_caller(text),
         )
 
+    def test_push_paths_ignore_cannot_neutralize_the_main_scan(self):
+        fixture = REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
+        text = fixture.read_text(encoding="utf-8").replace(
+            "  push:\n    branches: [main]\n",
+            "  push:\n    branches: [main]\n    paths-ignore: ['**']\n",
+        )
+        self.assertIn(
+            "caller bytes must exactly match the approved organization artifact",
+            adoption.validate_caller(text),
+        )
+
+    def test_extra_control_cannot_hide_behind_semantically_valid_triggers(self):
+        fixture = REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
+        text = fixture.read_text(encoding="utf-8").replace(
+            "name: security-scan\n",
+            "name: security-scan\nrun-name: harmless-looking override\n",
+        )
+        self.assertIn(
+            "caller bytes must exactly match the approved organization artifact",
+            adoption.validate_caller(text),
+        )
+
     def test_conditional_trivy_job_is_rejected(self):
         fixture = REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
         text = fixture.read_text(encoding="utf-8").replace(
@@ -408,6 +430,24 @@ class LocalRenovateContractTests(unittest.TestCase):
             errors,
         )
 
+    def test_local_config_cannot_inherit_an_unreviewed_preset(self):
+        errors = adoption.validate_renovate_config(
+            '{"extends": ["github>attacker/preset:default"]}'
+        )
+        self.assertIn(
+            "renovate.extends must be absent or empty; repository policy cannot inherit unapproved presets",
+            errors,
+        )
+
+    def test_local_config_cannot_ignore_the_organization_preset(self):
+        errors = adoption.validate_renovate_config(
+            '{"ignorePresets": ["github>FutureDevGuys/.github:renovate-config"]}'
+        )
+        self.assertIn(
+            "renovate.ignorePresets must not be present; the organization preset is mandatory",
+            errors,
+        )
+
     def test_local_config_cannot_remove_org_block_label(self):
         errors = adoption.validate_renovate_config(
             '{"packageRules": [{"removeLabels": ["migration-required"]}]}'
@@ -454,6 +494,160 @@ class LocalRenovateContractTests(unittest.TestCase):
     def test_malformed_config_is_rejected(self):
         errors = adoption.validate_renovate_config('{"automerge":')
         self.assertTrue(any("not valid JSON" in error for error in errors))
+
+    def test_effective_config_proof_binds_shared_and_local_policy(self):
+        shared = (REPO_ROOT / "renovate-config.json").read_text(encoding="utf-8")
+        proof, errors = adoption.effective_config_proof(
+            shared,
+            '{"packageRules": [{"automerge": false, "addLabels": ["edge"]}]}',
+        )
+        self.assertEqual(errors, [])
+        self.assertTrue(proof["shared_extends_allowlist_exact"])
+        self.assertTrue(proof["local_extends_closed"])
+        self.assertTrue(proof["major_manual_review_invariant"])
+
+    def test_effective_config_proof_rejects_inherited_candidate_bypass(self):
+        shared = (REPO_ROOT / "renovate-config.json").read_text(encoding="utf-8")
+        proof, errors = adoption.effective_config_proof(
+            shared,
+            '{"extends": ["github>attacker/preset:default"], "removeLabels": ["major"], "addLabels": ["automerge-candidate"]}',
+        )
+        self.assertTrue(errors)
+        self.assertFalse(proof["local_extends_closed"])
+        self.assertFalse(proof["local_candidate_label_forbidden"])
+        self.assertFalse(proof["reserved_label_removal_forbidden"])
+
+    def test_shared_preset_cannot_enable_merge_or_add_escape_hatches(self):
+        shared = json.loads(
+            (REPO_ROOT / "renovate-config.json").read_text(encoding="utf-8")
+        )
+        shared["ignorePresets"] = ["config:recommended"]
+        shared["packageRules"].append({"automerge": True})
+        _, errors = adoption.validate_shared_preset(json.dumps(shared))
+        self.assertIn(
+            "shared preset must not contain inherited-preset escape hatches",
+            errors,
+        )
+        self.assertTrue(
+            any(
+                error.startswith("shared.packageRules[")
+                and error.endswith(".automerge must not enable Renovate merging")
+                for error in errors
+            )
+        )
+
+
+class AdoptionWorkflowContractTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = (
+            REPO_ROOT / ".github/workflows/security-contract.yml"
+        ).read_text(encoding="utf-8")
+
+    def test_pull_requests_run_fixture_audits_without_private_credentials(self):
+        pull_request = adoption.indented_block(self.workflow, "pull_request", 2)
+        self.assertEqual(pull_request, "")
+        fixture_job = adoption.indented_block(
+            self.workflow, "adoption-fixture-audit", 2
+        )
+        self.assertIsNotNone(fixture_job)
+        assert fixture_job is not None
+        self.assertIn("--inventory-fixture", fixture_job)
+        self.assertIn("security-scan-adoption-fixture-receipt.json", fixture_job)
+        self.assertIn("if-no-files-found: error", fixture_job)
+        self.assertNotIn("SECURITY_AUDIT_TOKEN", fixture_job)
+        self.assertNotIn("GH_TOKEN", fixture_job)
+
+    def test_live_audit_is_held_to_schedule_or_dispatch_and_retains_failures(self):
+        live_job = adoption.indented_block(self.workflow, "adoption-audit", 2)
+        self.assertIsNotNone(live_job)
+        assert live_job is not None
+        self.assertIn(
+            "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'",
+            live_job,
+        )
+        self.assertIn("SECURITY_AUDIT_TOKEN", live_job)
+        self.assertIn("continue-on-error: true", live_job)
+        self.assertIn("if: always()", live_job)
+        self.assertIn("security-scan-adoption-receipt.json", live_job)
+        self.assertIn("if-no-files-found: error", live_job)
+
+
+class AdoptionInventoryTests(unittest.TestCase):
+    policy = REPO_ROOT / ".github/security-scan-adopters.json"
+    fixture = (
+        REPO_ROOT
+        / ".github/tests/fixtures/security-scan-adoption-inventory.json"
+    )
+
+    def audit(self, fixture: Path | None = None):
+        return adoption.audit_adoption(
+            adoption.FixtureProvider(fixture or self.fixture),
+            self.policy,
+            "1" * 40,
+            REPO_ROOT / "renovate-config.json",
+        )
+
+    def test_paginated_fixture_classifies_shellrc_active(self):
+        report = self.audit()
+        self.assertEqual(report["result"], {"status": "pass", "finding_count": 0})
+        self.assertTrue(report["visibility"]["complete"])
+        rows = {row["full_name"]: row for row in report["repositories"]}
+        self.assertEqual(rows["FutureDevGuys/.github"]["lifecycle"], "authority")
+        self.assertEqual(rows["FutureDevGuys/openclaw"]["lifecycle"], "archived")
+        self.assertEqual(rows["FutureDevGuys/shellrc.d"]["lifecycle"], "active")
+        self.assertEqual(
+            rows["FutureDevGuys/shellrc.d"]["default_revision"], "c" * 40
+        )
+        self.assertEqual(rows["FutureDevGuys/shellrc.d"]["security_scan"], "pass")
+
+    def test_active_repository_requires_one_immutable_default_revision(self):
+        fixture = json.loads(self.fixture.read_text(encoding="utf-8"))
+        fixture["repositories"][2]["default_revision"] = "main"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(fixture), encoding="utf-8")
+            report = self.audit(path)
+        row = next(
+            row
+            for row in report["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        self.assertIsNone(row["default_revision"])
+        self.assertEqual(row["security_scan"], "unknown")
+        self.assertEqual(report["result"]["status"], "fail")
+
+    def test_visibility_count_mismatch_fails_closed(self):
+        fixture = json.loads(self.fixture.read_text(encoding="utf-8"))
+        fixture["organization"]["total_private_repos"] = 3
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(fixture), encoding="utf-8")
+            report = self.audit(path)
+        self.assertFalse(report["visibility"]["complete"])
+        self.assertIn(
+            "paginated repository count does not match organization totals",
+            report["findings"],
+        )
+
+    def test_receipt_binds_inventory_and_report_bytes(self):
+        report = self.audit()
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "adoption-report.json"
+            receipt_path = Path(temporary) / "adoption-receipt.json"
+            adoption.write_atomic(report_path, report)
+            adoption.write_atomic(
+                receipt_path,
+                adoption.build_receipt(report_path, report),
+            )
+            self.assertEqual(
+                adoption.validate_evidence(report_path, receipt_path), []
+            )
+            report["repositories"][2]["lifecycle"] = "archived"
+            adoption.write_atomic(report_path, report)
+            self.assertIn(
+                "receipt artifact digest does not match",
+                adoption.validate_evidence(report_path, receipt_path),
+            )
 
 
 if __name__ == "__main__":

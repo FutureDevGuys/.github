@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "enabled": false,
+  "kill_switch": true,
+  "reasons": [
+    "public_policy_branch_required_checks_and_reviews_are_not_enforced",
+    "refresh_and_merge_use_one_ordinary_user_credential",
+    "cross_repository_merge_queue_or_equivalent_serialization_is_not_proven"
+  ],
+  "required_preconditions": {
+    "main_branch": {
+      "required_status_checks": [
+        "actionlint",
+        "adoption-fixture-audit",
+        "authority-fixture-audit",
+        "scan-contract-tests",
+        "trivy-contract-smoke"
+      ],
+      "required_approving_reviews": 1,
+      "required_conversation_resolution": true
+    },
+    "release_branch": {
+      "required_signatures": true,
+      "enforce_admins": true,
+      "required_linear_history": true,
+      "allow_force_pushes": false,
+      "allow_deletions": false
+    },
+    "identities": {
+      "refresh": "dedicated_github_app",
+      "merge": "separate_dedicated_github_app",
+      "must_be_distinct": true
+    },
+    "merge_serialization": {
+      "mode": "merge_queue_or_equivalent_server_enforced_queue",
+      "head_compare_and_swap_is_sufficient": false
+    }
+  }
+}

@@ -25,9 +25,15 @@
     "allow_force_pushes": false,
     "allow_deletions": false,
     "required_status_checks": {
-      "mode": "intentionally_absent",
-      "reason": "github_actions_billing_admission_blocked",
-      "contexts": []
+      "mode": "activation_held",
+      "reason": "automerge_kill_switch_until_required_checks_and_reviews_enforced",
+      "contexts": [
+        "actionlint",
+        "adoption-fixture-audit",
+        "authority-fixture-audit",
+        "scan-contract-tests",
+        "trivy-contract-smoke"
+      ]
     }
   }
 }

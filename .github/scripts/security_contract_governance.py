@@ -112,6 +112,7 @@ class Policy:
     python_roots: tuple[str, ...]
     status_checks_mode: str
     status_checks_reason: str
+    status_checks_contexts: tuple[str, ...]
 
     @property
     def digest(self) -> str:
@@ -229,12 +230,22 @@ def load_policy(path: Path) -> Policy:
     if not isinstance(checks, dict):
         raise GovernanceError("required_status_checks must be an object")
     exact_keys(checks, {"mode", "reason", "contexts"}, "required_status_checks")
-    if checks.get("mode") != "intentionally_absent":
-        raise GovernanceError("only intentionally_absent status checks are supported")
-    if checks.get("reason") != "github_actions_billing_admission_blocked":
-        raise GovernanceError("status-check absence must name the billing admission blocker")
-    if checks.get("contexts") != []:
-        raise GovernanceError("intentionally absent status checks cannot declare contexts")
+    expected_contexts = [
+        "actionlint",
+        "adoption-fixture-audit",
+        "authority-fixture-audit",
+        "scan-contract-tests",
+        "trivy-contract-smoke",
+    ]
+    if checks.get("mode") != "activation_held":
+        raise GovernanceError("status checks must remain activation-held")
+    if (
+        checks.get("reason")
+        != "automerge_kill_switch_until_required_checks_and_reviews_enforced"
+    ):
+        raise GovernanceError("status-check hold must name the automerge kill switch")
+    if checks.get("contexts") != expected_contexts:
+        raise GovernanceError("activation-held status checks must name exact future contexts")
     paths = bundle["paths"]
     roots = bundle["python_roots"]
     if not isinstance(paths, dict) or not paths:
@@ -274,6 +285,7 @@ def load_policy(path: Path) -> Policy:
         python_roots=normalized_roots,
         status_checks_mode=checks["mode"],
         status_checks_reason=checks["reason"],
+        status_checks_contexts=tuple(expected_contexts),
     )
 
 
@@ -497,6 +509,13 @@ def inspect_protection(
             )
             return None, findings
     try:
+        required_checks = raw.get("required_status_checks") if isinstance(raw, dict) else None
+        configured_contexts = (
+            required_checks.get("contexts")
+            if isinstance(required_checks, dict)
+            and isinstance(required_checks.get("contexts"), list)
+            else []
+        )
         state = {
             "required_signatures": signatures_enabled,
             "enforce_admins": enabled(raw, "enforce_admins"),
@@ -504,10 +523,13 @@ def inspect_protection(
             "allow_force_pushes": enabled(raw, "allow_force_pushes"),
             "allow_deletions": enabled(raw, "allow_deletions"),
             "required_status_checks": (
-                "absent" if isinstance(raw, dict) and raw.get("required_status_checks") is None
+                "absent" if required_checks is None
                 else "configured"
             ),
+            "configured_status_check_contexts": configured_contexts,
+            "status_checks_mode": policy.status_checks_mode,
             "status_checks_reason": policy.status_checks_reason,
+            "activation_required_contexts": list(policy.status_checks_contexts),
         }
         expected = {
             "required_signatures": True,
@@ -516,7 +538,10 @@ def inspect_protection(
             "allow_force_pushes": False,
             "allow_deletions": False,
             "required_status_checks": "absent",
+            "configured_status_check_contexts": [],
+            "status_checks_mode": policy.status_checks_mode,
             "status_checks_reason": policy.status_checks_reason,
+            "activation_required_contexts": list(policy.status_checks_contexts),
         }
         state["contract_exact"] = state == expected
         if not state["contract_exact"]:
@@ -690,7 +715,7 @@ def build_report(
             "status_checks": {
                 "mode": policy.status_checks_mode,
                 "reason": policy.status_checks_reason,
-                "contexts": [],
+                "contexts": list(policy.status_checks_contexts),
             },
         },
         "resolution": resolution,
@@ -715,6 +740,8 @@ def build_receipt(policy: Policy, report_path: Path, report: dict[str, Any]) -> 
             "default_revision": report["resolution"]["default_revision"],
             "release_revision": report["resolution"]["release_revision"],
             "status_checks_mode": policy.status_checks_mode,
+            "status_checks_reason": policy.status_checks_reason,
+            "status_checks_contexts": list(policy.status_checks_contexts),
         },
         "result": report["result"],
         "artifact": {
@@ -762,11 +789,11 @@ def validate_evidence(
     else:
         checks = contract.get("status_checks")
         if checks != {
-            "mode": "intentionally_absent",
+            "mode": "activation_held",
             "reason": policy.status_checks_reason,
-            "contexts": [],
+            "contexts": list(policy.status_checks_contexts),
         }:
-            errors.append("report does not truthfully bind absent status checks")
+            errors.append("report does not truthfully bind activation-held status checks")
     resolution = report.get("resolution")
     if not isinstance(resolution, dict) or resolution.get("manifest_closed") is not True:
         errors.append("report does not prove a manifest-closed bundle")
@@ -804,15 +831,25 @@ def validate_evidence(
             errors.append("receipt artifact size does not match")
     if receipt.get("executed") is not True or receipt.get("result") != report.get("result"):
         errors.append("receipt does not bind successful execution")
-    inputs = receipt.get("inputs")
-    if not isinstance(inputs, dict) or inputs.get("policy_sha256") != policy.digest:
-        errors.append("receipt policy binding does not match")
-    elif isinstance(resolution, dict) and (
-        inputs.get("default_revision") != resolution.get("default_revision")
-        or inputs.get("release_revision") != resolution.get("release_revision")
-        or inputs.get("status_checks_mode") != policy.status_checks_mode
-    ):
-        errors.append("receipt resolution binding does not match")
+    expected_inputs = {
+        "repository": policy.repository,
+        "policy_sha256": policy.digest,
+        "default_revision": (
+            resolution.get("default_revision")
+            if isinstance(resolution, dict)
+            else None
+        ),
+        "release_revision": (
+            resolution.get("release_revision")
+            if isinstance(resolution, dict)
+            else None
+        ),
+        "status_checks_mode": policy.status_checks_mode,
+        "status_checks_reason": policy.status_checks_reason,
+        "status_checks_contexts": list(policy.status_checks_contexts),
+    }
+    if receipt.get("inputs") != expected_inputs:
+        errors.append("receipt policy and resolution binding does not match")
     return errors
 
 
@@ -914,6 +951,10 @@ def make_release_plan(
     )
     if default_protection is None:
         raise GovernanceError("default branch protection cannot be read safely")
+    if default_protection.get("required_status_checks") == "configured":
+        raise GovernanceError(
+            "default branch has configured status checks; update the activation-held policy instead of weakening protection"
+        )
     if default_findings:
         operations.extend(
             [
@@ -935,6 +976,10 @@ def make_release_plan(
         )
         if release_protection is None:
             raise GovernanceError("release branch protection cannot be read safely")
+        if release_protection.get("required_status_checks") == "configured":
+            raise GovernanceError(
+                "release branch has configured status checks; update the activation-held policy instead of weakening protection"
+            )
         if observed_release != candidate and (
             findings or release_protection.get("contract_exact") is not True
         ):

@@ -12,7 +12,9 @@ This repository is the shared automation home for `FutureDevGuys`.
 - Failure contract: at most two Renovate attempts per run; automerge skips emit
   reason-and-age evidence and aged zero-progress runs degrade
 - PR merge policy: the self-hosted runtime force-disables Renovate merge
-  execution and Renovate only labels candidates. The separate sweep validates
+  execution and Renovate only labels candidates. The separate sweep is
+  source-kill-switched until required checks/reviews, distinct GitHub App
+  identities, and server-enforced merge serialization exist. Its dormant path validates
   the exact Renovate principal, same-repository ID, commit identity, immutable
   Trivy caller, and explicit successful checks for the current head SHA before a
   squash merge with branch deletion.
@@ -57,9 +59,13 @@ Required checks and immutable repository identities live in
 or ambiguously duplicated checks block and are recorded as outcome reasons.
 The sweep also rejects a candidate whose current-head security caller is not a
 truthful adopter of the exact checked-out org workflow revision.
-The scheduled adoption audit also reads every declared repo-local
-`renovate.json` and rejects direct Renovate automerge settings, preserving the
-separate sweep as the only automated merge executor.
+The scheduled adoption audit discovers the complete paginated organization
+inventory, resolves every active default branch once to an immutable commit,
+and reads callers and optional `renovate.json` only at that commit. It rejects
+inherited presets, direct Renovate automerge settings, local candidate-label
+ownership, and reserved-label removal. The public PR fixture exercises the
+same lifecycle, byte-exact caller, effective-config, report, and receipt paths
+without a private token.
 
 Trivy caller updates follow the protected `security-contract-v1` release ref,
 not the unrelated organization-policy `main` tip. The adoption audit resolves
@@ -68,8 +74,8 @@ that ref to one exact commit and requires both caller pins to equal it.
 ## Required Actions secrets
 
 - `RENOVATE_TOKEN`
-- `SECURITY_AUDIT_TOKEN` with read access to every private repository declared
-  in `.github/security-scan-adopters.json`
+- `SECURITY_AUDIT_TOKEN` with read access to every private repository visible
+  in the complete `FutureDevGuys` organization inventory
 - `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` when private Docker Hub access is needed
 - `GHCR_USERNAME` and `GHCR_TOKEN` when private GHCR access is needed
 
@@ -93,10 +99,11 @@ ancestry, and branch protections.
 
 The scheduled/manual `security-contract` workflow is read-only. It retains a
 digest-bound report and receipt, and fails when the release ref, signature,
-ancestry, bundle closure, or protection state drifts. Required status checks are
-explicitly modeled as intentionally absent while GitHub Actions billing refuses
-to start jobs; the repository does not claim that a non-running check is
-enforced.
+ancestry, bundle closure, or protection state drifts. The current public-policy
+branches do not enforce required checks, reviews, or conversation resolution.
+Policy therefore records the exact future check set as `activation_held`, and
+the separate automerge workflow validates an explicit source kill switch before
+its mutating job can exist in the run graph. This is a hold, not enforcement.
 
 The automerge sweep resolves the closed bundle directly from the protected
 `security-contract-v1` ref at admission and re-audits that same revision at the
@@ -115,9 +122,11 @@ python3 .github/scripts/security_contract_governance.py \
   --approve <plan-digest> --receipt /tmp/security-contract-release-receipt.json
 ```
 
-The apply helper exact-sets protection, permits only a fast-forward of an
-existing release ref, and requires a successful remote postcondition audit.
+The apply helper exact-sets the currently approved release protection, permits
+only a fast-forward of an existing release ref, and requires a successful
+remote postcondition audit. If stronger status checks are already configured,
+planning stops and requires the policy to advance instead of removing them.
 WHEN creating the release branch for the first time THEN you SHALL use this
 helper and retain its receipt. You SHALL NOT run the apply command from Actions,
-force the release ref, or configure required checks until GitHub can actually
-start and complete the named jobs.
+force the release ref, or enable automerge until every activation precondition
+is enforced and independently audited.

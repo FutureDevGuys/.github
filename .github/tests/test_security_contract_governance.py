@@ -239,7 +239,7 @@ class GovernanceContractTests(unittest.TestCase):
         self.assertFalse(authority["release_protection"]["required_signatures"])
         self.assertIn("branch_protection_drift", {item["code"] for item in findings})
 
-    def test_configured_status_checks_are_not_claimed_while_billing_blocks_jobs(self):
+    def test_configured_status_checks_require_policy_advancement_not_removal(self):
         fixture = copy.deepcopy(FIXTURE)
         fixture["protection"]["required_status_checks"] = {
             "strict": True,
@@ -252,6 +252,13 @@ class GovernanceContractTests(unittest.TestCase):
             authority["release_protection"]["required_status_checks"], "configured"
         )
         self.assertIn("branch_protection_drift", {item["code"] for item in findings})
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "update the activation-held policy instead of weakening protection",
+        ):
+            governance.make_release_plan(
+                FixtureClient(fixture), REPO_ROOT, self.policy, TEST_REVISION
+            )
 
     def test_dynamic_and_undeclared_local_imports_fail_closed(self):
         with self.assertRaisesRegex(governance.GovernanceError, "dynamic imports"):
@@ -397,7 +404,13 @@ class GovernanceContractTests(unittest.TestCase):
         workflow = (
             REPO_ROOT / ".github/workflows/security-contract.yml"
         ).read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("security_contract_governance.py"), 2)
+        self.assertEqual(
+            workflow.count(
+                "python3 .github/scripts/security_contract_governance.py"
+            ),
+            2,
+        )
+        self.assertIn('test_security_contract_governance.py"', workflow)
         self.assertIn("\n          audit\n", workflow)
         self.assertIn("\n          validate\n", workflow)
         self.assertIn("if-no-files-found: error", workflow)

@@ -3,15 +3,6 @@ name: security-contract
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - ".github/automerge-policy.json"
-      - ".github/renovate-config.js"
-      - ".github/security-contract-governance.json"
-      - ".github/security-scan-adopters.json"
-      - ".github/scripts/**"
-      - ".github/tests/**"
-      - ".github/workflows/**"
-      - "renovate-config.json"
   push:
     branches: [main]
     paths:
@@ -56,6 +47,50 @@ jobs:
           fetch-depth: 0
       - name: Run receipt and caller contract fixtures
         run: python3 -m unittest discover -s .github/tests -p "test_*.py" -v
+
+  authority-fixture-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - name: Exercise signed release authority against the fixture API
+        run: >-
+          python3 -m unittest discover
+          -s .github/tests
+          -p "test_security_contract_governance.py"
+          -v
+
+  adoption-fixture-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Exercise paginated lifecycle adoption without private credentials
+        run: >-
+          python3 .github/scripts/audit_security_scan_adoption.py
+          --manifest .github/security-scan-adopters.json
+          audit
+          --required-revision 1111111111111111111111111111111111111111
+          --inventory-fixture .github/tests/fixtures/security-scan-adoption-inventory.json
+          --report security-scan-adoption-fixture-report.json
+          --receipt security-scan-adoption-fixture-receipt.json
+      - name: Validate fixture adoption receipt
+        run: >-
+          python3 .github/scripts/audit_security_scan_adoption.py
+          validate
+          --report security-scan-adoption-fixture-report.json
+          --receipt security-scan-adoption-fixture-receipt.json
+      - name: Retain fixture adoption evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: security-scan-adoption-fixture
+          path: |
+            security-scan-adoption-fixture-report.json
+            security-scan-adoption-fixture-receipt.json
+          if-no-files-found: error
+          retention-days: 14
 
   release-authority-audit:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -172,6 +207,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
       - name: Require private-repository read token
         env:
           GH_TOKEN: ${{ secrets.SECURITY_AUDIT_TOKEN }}
@@ -182,7 +219,9 @@ jobs:
             exit 1
           fi
           gh auth status
-      - name: Audit declared repository callers on main
+      - name: Audit paginated organization adoption on main
+        id: adoption_audit
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.SECURITY_AUDIT_TOKEN }}
         run: |
@@ -198,5 +237,24 @@ jobs:
           fi
           python3 .github/scripts/audit_security_scan_adoption.py \
             --manifest .github/security-scan-adopters.json \
-            --ref main \
-            --required-revision "${policy_revision}"
+            audit \
+            --required-revision "${policy_revision}" \
+            --report security-scan-adoption-report.json \
+            --receipt security-scan-adoption-receipt.json
+      - name: Retain live adoption evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: security-scan-adoption
+          path: |
+            security-scan-adoption-report.json
+            security-scan-adoption-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate live adoption receipt
+        if: always()
+        run: >-
+          python3 .github/scripts/audit_security_scan_adoption.py
+          validate
+          --report security-scan-adoption-report.json
+          --receipt security-scan-adoption-receipt.json

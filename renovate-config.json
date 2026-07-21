@@ -40,10 +40,14 @@
     },
     {
       "customType": "regex",
-      "description": "Track the exact Renovate runtime tag and digest used by the org GitHub Action.",
-      "managerFilePatterns": ["/^\\.github/workflows/renovate\\.yml$/"],
+      "description": "Atomically track the exact Renovate runtime tag/digest and its executable test oracle.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/renovate\\.yml$/",
+        "/^\\.github/tests/test_renovate_contract\\.py$/"
+      ],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>docker)\\s+depName=(?<depName>renovate/renovate)\\n\\s*renovate-version:\\s*[\"']?(?<currentValue>[^@\"'\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+        "#\\s*renovate:\\s*datasource=(?<datasource>docker)\\s+depName=(?<depName>renovate/renovate)\\n\\s*renovate-version:\\s*[\"']?(?<currentValue>[^@\"'\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})",
+        "#\\s*renovate:\\s*datasource=(?<datasource>docker)\\s+depName=(?<depName>renovate/renovate)\\nEXPECTED_RENOVATE_RUNTIME\\s*=\\s*[\"'](?<currentValue>[^@\"'\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})[\"']"
       ]
     }
   ],

@@ -16,7 +16,7 @@ admission exist.
 | Stateful, database, and incompatible majors | The universal major rule adds `manual-review` and `major`; the sweep blocks both labels. Renovate itself is force-configured never to merge. Repository owners may add `migration-required`, which is also a blocking label. The adoption validator prevents local policy from assigning `automerge-candidate` or removing a reserved block label, so local precedence cannot silently reclassify a major. | Satisfied in source. |
 | Explicit skip reason and age | Every candidate outcome is recorded as JSONL with reason, detail, creation/observation time, computed age, and whether it blocks progress. The summary degrades on aged actionable skips even when another PR merged or refreshed. | Satisfied in source. |
 | Truthful Trivy execution evidence | A scan step always produces a receipt and report artifact. The validator requires `executed=true`, a nonempty tool version, exact caller context and workflow revision, current Trivy schema, positive report size, matching digest/counts, clean action outcome, and independently recomputed HIGH/CRITICAL counts. Missing, skipped, malformed, stale-context, or tampered evidence fails. | Satisfied in source. |
-| Minimal caller and adoption | The caller fixture requires PR, main push, schedule, and manual triggers; exact paired release SHA; read-only permissions; no secrets or conditional skip; and one `trivy` job. The dependency-free validator now rejects duplicate or extra control mappings so its interpretation cannot differ from GitHub's YAML loader. | Satisfied in source. |
+| Minimal caller and adoption | Every active repository discovered through paginated organization inventory must byte-match the release-pinned caller. Default branches resolve once to immutable commits; lifecycle, visibility totals, caller bytes, effective Renovate policy, report bytes, and receipt digests are bound. The PR fixture includes `shellrc.d` and executes without a private token; the live audit remains scheduled/manual and credential-held. | Satisfied in source; current consumers still fail the live audit. |
 | Path-scoped caller release | Renovate tracks `security-contract-v1`; the adoption job and automerge sweep resolve that exact protected commit rather than using `${{ github.sha }}` from unrelated `main`. Automerge audits the closed, signed, protected release before candidate evaluation and re-audits the same SHA immediately before merge. | Corrected in this change. |
 
 ## Truthful holds
@@ -26,10 +26,14 @@ admission exist.
   cryptographic.
 - `SECURITY_AUDIT_TOKEN` is absent, so private cross-repository adoption cannot
   be called operational.
-- Organization Actions billing/admission still blocks representative private
-  consumers. A skipped or zero-step check is not execution evidence, and
-  required branch status checks remain intentionally absent until named jobs
-  execute reliably.
+- Representative private-repository jobs still report Actions spending/admission
+  failures. That does not apply to the public authority fixture contract and is
+  not used as the reason for absent public branch protections. The public
+  policy branches currently lack required checks/reviews, so automerge remains
+  explicitly source-kill-switched.
+- Refresh and merge do not have distinct GitHub App identities or a proven
+  merge queue/equivalent serialization. Exact-head compare-and-swap does not
+  close the base/check/status race.
 - Private-repository branch-rule enforcement is unavailable under the current
   organization plan. The sweep fails closed, but it cannot prevent a separate
   human direct push or merge.

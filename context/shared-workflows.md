@@ -33,7 +33,9 @@ separate sweep is:
   assigns `automerge-candidate`. Local policy must not enable Renovate merging,
   select a merge type/strategy, assign the candidate label, or remove reserved
   block labels; the scheduled adoption audit enforces that boundary for every
-  repository listed in `renovate_config_repositories`.
+  active repository discovered from the complete paginated organization
+  inventory. Local `extends`, `globalExtends`, and `ignorePresets` cannot widen
+  or replace the reviewed organization preset.
 - Immutable `digest` and `pinDigest` updates do not inherit a release-age gate;
   non-immutable patch and minor updates retain their semantic cooldowns.
 
@@ -45,9 +47,12 @@ candidate skip reason and PR age. An aged actionable blocker with zero eligible
 or merged progress marks the run degraded; policy-blocked manual work is
 reported but does not count as an actionable blocker.
 
-The automerge sweep uses squash merges and deletes merged Renovate branches. The
-org repositories are configured to allow squash merges only, so manual PR merges
-use the same history shape as the automation.
+The automerge sweep's mutating job is currently source-kill-switched. Its future
+path uses squash merges and deletes merged Renovate branches, but it cannot run
+until main enforces the named checks, one approval, and conversation resolution;
+refresh and merge use distinct dedicated GitHub Apps; and a merge queue or
+equivalent server-enforced serialization exists. Exact-head comparison remains
+one race guard and is not claimed as atomic serialization.
 
 `.github/automerge-policy.json` is the fail-closed identity and required-check
 contract. A candidate must have the exact trusted Renovate principal, the
@@ -157,9 +162,10 @@ non-blob, linked, gitlink, wrong-mode, or main/release byte-divergent members.
 The release audit verifies the immutable repository identity, exact release
 SHA, valid GitHub signature, ancestry from `main`, required signatures,
 administrator enforcement, linear history, and disabled force-push/deletion on
-both branches. It records required status checks as intentionally absent while
-Actions billing blocks job admission. WHEN runner admission is restored THEN
-you SHALL update the policy and tests before claiming any required check.
+both branches. Current status checks and reviews are absent, so the policy names
+the exact activation-held future contexts and automerge stays source-disabled.
+WHEN those protections are enforceable THEN you SHALL advance the policy and
+activation gate together before claiming automerge readiness.
 
 The automerge sweep uses the same governance policy but resolves bundle bytes
 directly at the protected release SHA. It audits that authority before examining
