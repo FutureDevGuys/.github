@@ -9,10 +9,17 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_DIR = REPO_ROOT / ".github/scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import renovate_config_authority as config_authority  # noqa: E402
+import security_scan_adoption_evidence as adoption_evidence  # noqa: E402
 
 
 def load_module(name: str, relative_path: str):
@@ -662,6 +669,30 @@ class AdoptionInventoryTests(unittest.TestCase):
             REPO_ROOT / "renovate-config.json",
         )
 
+    def audit_with_files(self, files: dict[str, str]):
+        fixture = json.loads(self.fixture.read_text(encoding="utf-8"))
+        active = next(
+            row
+            for row in fixture["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        active["files"].update(files)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(fixture), encoding="utf-8")
+            return self.audit(path)
+
+    def validate_rebuilt(self, report: dict[str, Any]) -> list[str]:
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "adoption-report.json"
+            receipt_path = Path(temporary) / "adoption-receipt.json"
+            adoption.write_atomic(report_path, report)
+            adoption.write_atomic(
+                receipt_path,
+                adoption.build_receipt(report_path, report),
+            )
+            return adoption_evidence.validate_evidence(report_path, receipt_path)
+
     def test_paginated_fixture_classifies_shellrc_active(self):
         report = self.audit()
         self.assertEqual(report["result"], {"status": "pass", "finding_count": 0})
@@ -723,6 +754,298 @@ class AdoptionInventoryTests(unittest.TestCase):
                 "receipt artifact digest does not match",
                 adoption.validate_evidence(report_path, receipt_path),
             )
+
+    def test_every_alternate_renovate_config_path_fails_closed(self):
+        for alternate in config_authority.ALTERNATE_RENOVATE_CONFIGS:
+            with self.subTest(path=alternate):
+                report = self.audit_with_files({alternate: "{}\n"})
+                row = next(
+                    row
+                    for row in report["repositories"]
+                    if row["full_name"] == "FutureDevGuys/shellrc.d"
+                )
+                finding = (
+                    "FutureDevGuys/shellrc.d: alternate Renovate config source "
+                    f"is forbidden: {alternate}"
+                )
+                self.assertEqual(row["renovate_effective_config"], "fail")
+                self.assertIn(finding, row["findings"])
+                self.assertIn(finding, report["findings"])
+                self.assertEqual(
+                    self.validate_rebuilt(report),
+                    ["adoption audit result is not pass"],
+                )
+
+    def test_config_source_module_returns_the_documented_complete_order(self):
+        files = {
+            "renovate.json": "{}\n",
+            ".renovaterc.jsonc": "{}\n",
+            "package.json": '{"name":"fixture"}\n',
+        }
+
+        def read_file(path: str) -> tuple[str | None, str | None]:
+            return files.get(path), None
+
+        sources, canonical, findings = config_authority.inspect_config_sources(
+            read_file
+        )
+        self.assertEqual(
+            [source["path"] for source in sources],
+            list(config_authority.RENOVATE_CONFIG_PATHS),
+        )
+        self.assertEqual(canonical, "{}\n")
+        self.assertEqual(
+            findings,
+            [
+                "alternate Renovate config source is forbidden: "
+                ".renovaterc.jsonc"
+            ],
+        )
+
+    def test_package_json_renovate_object_fails_but_plain_package_passes(self):
+        failed = self.audit_with_files(
+            {"package.json": '{"name":"fixture","renovate":{"extends":[]}}\n'}
+        )
+        failed_row = next(
+            row
+            for row in failed["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        self.assertEqual(failed_row["renovate_effective_config"], "fail")
+        self.assertIn(
+            "FutureDevGuys/shellrc.d: alternate Renovate config source is forbidden: package.json#renovate",
+            failed["findings"],
+        )
+        self.assertEqual(
+            self.validate_rebuilt(failed),
+            ["adoption audit result is not pass"],
+        )
+
+        passed = self.audit_with_files(
+            {"package.json": '{"name":"fixture","private":true}\n'}
+        )
+        passed_row = next(
+            row
+            for row in passed["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        package_source = passed_row["renovate_config_sources"][-1]
+        self.assertEqual(package_source["state"], "present_without_renovate")
+        self.assertEqual(passed["result"], {"status": "pass", "finding_count": 0})
+        self.assertEqual(self.validate_rebuilt(passed), [])
+
+    def test_rebuilt_receipt_cannot_forge_retained_finding_as_pass(self):
+        report = self.audit_with_files({"renovate.jsonc": "{}\n"})
+        report["result"] = {"status": "pass", "finding_count": 0}
+        errors = self.validate_rebuilt(report)
+        self.assertIn("report result does not match recomputed findings", errors)
+        self.assertIn("adoption audit result is not pass", errors)
+
+    def test_mixed_global_and_row_findings_remain_canonical_and_semantic(self):
+        fixture = json.loads(self.fixture.read_text(encoding="utf-8"))
+        fixture["organization"]["total_private_repos"] = 3
+        active = next(
+            row
+            for row in fixture["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        active["files"]["renovate.jsonc"] = "{}\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(fixture), encoding="utf-8")
+            report = self.audit(path)
+        self.assertEqual(report["findings"], sorted(report["findings"]))
+        self.assertEqual(
+            self.validate_rebuilt(report),
+            [
+                "report does not prove complete organization visibility",
+                "adoption audit result is not pass",
+            ],
+        )
+
+    def test_findings_drop_duplicate_reorder_and_row_mismatch_are_rejected(self):
+        base = self.audit_with_files(
+            {"renovate.jsonc": "{}\n", ".renovaterc": "{}\n"}
+        )
+        self.assertEqual(base["result"]["finding_count"], 2)
+        cases: list[tuple[str, dict[str, Any]]] = []
+        dropped = json.loads(json.dumps(base))
+        dropped["findings"] = dropped["findings"][:-1]
+        cases.append(("dropped", dropped))
+        duplicated = json.loads(json.dumps(base))
+        duplicated["findings"].append(duplicated["findings"][0])
+        cases.append(("duplicated", duplicated))
+        reordered = json.loads(json.dumps(base))
+        reordered["findings"] = list(reversed(reordered["findings"]))
+        cases.append(("reordered", reordered))
+        row_mismatch = json.loads(json.dumps(base))
+        active = next(
+            row
+            for row in row_mismatch["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        active["findings"] = []
+        cases.append(("row_mismatch", row_mismatch))
+        for label, report in cases:
+            with self.subTest(case=label):
+                errors = self.validate_rebuilt(report)
+                self.assertTrue(
+                    any(
+                        "findings" in error
+                        and (
+                            "canonical" in error
+                            or "exactly match" in error
+                            or "row audit dimensions" in error
+                        )
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_findings_schema_content_is_rejected_before_result_semantics(self):
+        base = self.audit()
+        for value, expected in (
+            ("not-a-list", "report findings must be a list"),
+            ([1], "report findings must contain nonempty strings"),
+        ):
+            with self.subTest(value=value):
+                report = json.loads(json.dumps(base))
+                report["findings"] = value
+                self.assertIn(expected, self.validate_rebuilt(report))
+
+    def test_result_count_and_status_mutations_are_rejected(self):
+        failed = self.audit_with_files({"renovate.jsonc": "{}\n"})
+        for result in (
+            {"status": "pass", "finding_count": 1},
+            {"status": "fail", "finding_count": 0},
+            {"status": "pass", "finding_count": 0},
+        ):
+            with self.subTest(result=result):
+                report = json.loads(json.dumps(failed))
+                report["result"] = result
+                self.assertIn(
+                    "report result does not match recomputed findings",
+                    self.validate_rebuilt(report),
+                )
+        clean = self.audit()
+        clean["result"] = {"status": "fail", "finding_count": 0}
+        self.assertIn(
+            "report result does not match recomputed findings",
+            self.validate_rebuilt(clean),
+        )
+
+    def test_global_findings_must_match_visibility_dimensions(self):
+        fixture = json.loads(self.fixture.read_text(encoding="utf-8"))
+        fixture["organization"]["total_private_repos"] = 3
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(fixture), encoding="utf-8")
+            report = self.audit(path)
+        report["findings"] = []
+        report["result"] = {"status": "pass", "finding_count": 0}
+        errors = self.validate_rebuilt(report)
+        self.assertIn(
+            "report findings do not exactly match global and repository findings",
+            errors,
+        )
+        self.assertIn("report result does not match recomputed findings", errors)
+
+    def test_active_status_and_proof_tampering_is_rejected(self):
+        base = self.audit()
+        scan_tamper = json.loads(json.dumps(base))
+        scan_row = next(
+            row
+            for row in scan_tamper["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        scan_row["security_scan"] = "fail"
+        self.assertIn(
+            "FutureDevGuys/shellrc.d security status does not match caller evidence",
+            self.validate_rebuilt(scan_tamper),
+        )
+
+        proof_tamper = json.loads(json.dumps(base))
+        proof_row = next(
+            row
+            for row in proof_tamper["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        proof_row["effective_config_proof"]["local_extends_closed"] = False
+        self.assertIn(
+            "FutureDevGuys/shellrc.d effective-config proof flag local_extends_closed does not match findings",
+            self.validate_rebuilt(proof_tamper),
+        )
+
+        unrelated_finding = self.audit_with_files({"renovate.jsonc": "{}\n"})
+        unrelated_row = next(
+            row
+            for row in unrelated_finding["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        unrelated_row["effective_config_proof"]["local_extends_closed"] = False
+        self.assertIn(
+            "FutureDevGuys/shellrc.d effective-config proof flag local_extends_closed does not match findings",
+            self.validate_rebuilt(unrelated_finding),
+        )
+
+    def test_lifecycle_tampering_is_recomputed_from_policy_and_inventory(self):
+        report = self.audit()
+        row = next(
+            row
+            for row in report["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        row["lifecycle"] = "archived"
+        self.assertIn(
+            "FutureDevGuys/shellrc.d lifecycle does not match policy and inventory",
+            self.validate_rebuilt(report),
+        )
+
+    def test_non_active_status_and_proof_tampering_is_rejected(self):
+        for lifecycle in ("authority", "archived"):
+            with self.subTest(lifecycle=lifecycle):
+                report = self.audit()
+                row = next(
+                    row
+                    for row in report["repositories"]
+                    if row["lifecycle"] == lifecycle
+                )
+                row["security_scan"] = "pass"
+                row["effective_config_proof"] = {}
+                errors = self.validate_rebuilt(report)
+                self.assertIn(
+                    f"{row['full_name']} non-active security status is not_applicable",
+                    errors,
+                )
+                self.assertIn(
+                    f"{row['full_name']} non-active row contains Renovate evidence",
+                    errors,
+                )
+
+    def test_config_source_inventory_digest_is_semantically_recomputed(self):
+        report = self.audit()
+        row = next(
+            row
+            for row in report["repositories"]
+            if row["full_name"] == "FutureDevGuys/shellrc.d"
+        )
+        alternate = row["renovate_config_sources"][1]
+        alternate.update({"state": "present", "sha256": "a" * 64})
+        inventory = [
+            {
+                "repository": row["full_name"],
+                "revision": row["default_revision"],
+                "sources": row["renovate_config_sources"],
+            }
+        ]
+        report["inputs"]["renovate_config_sources_sha256"] = adoption.digest(
+            adoption.canonical_json(inventory)
+        )
+        errors = self.validate_rebuilt(report)
+        self.assertIn(
+            "FutureDevGuys/shellrc.d alternate config presence lacks an exact finding",
+            errors,
+        )
 
 
 if __name__ == "__main__":

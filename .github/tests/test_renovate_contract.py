@@ -228,6 +228,27 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertNotEqual(mutable.returncode, 0)
         self.assertIn("exact 40-character commit SHA", mutable.stderr)
 
+    def test_runtime_uses_only_the_canonical_repository_config_path(self):
+        env = {
+            **os.environ,
+            "RENOVATE_CONFIG_PRESET": (
+                "github>FutureDevGuys/.github:renovate-config#" + "1" * 40
+            ),
+        }
+        completed = subprocess.run(
+            [
+                "node",
+                "-e",
+                "process.stdout.write(JSON.stringify(require('./.github/renovate-config.js').configFileNames))",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(json.loads(completed.stdout), ["renovate.json"])
+
     def test_runtime_force_disables_renovate_merge_execution(self):
         env = {
             **os.environ,
