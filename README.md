@@ -98,6 +98,13 @@ explicitly modeled as intentionally absent while GitHub Actions billing refuses
 to start jobs; the repository does not claim that a non-running check is
 enforced.
 
+The automerge sweep resolves the closed bundle directly from the protected
+`security-contract-v1` ref at admission and re-audits that same revision at the
+merge boundary. Candidate callers are compared with that approved immutable
+revision, not the workflow checkout or mutable `main`; a moved, unsigned,
+unprotected, non-ancestor, or non-closed release holds the merge and retains the
+authority evidence with the candidate artifacts.
+
 Release changes use an operator-reviewed plan:
 
 ```bash

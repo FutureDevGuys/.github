@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout outcome contract
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
 
       - name: Automerge sweep
         env:
@@ -101,10 +103,32 @@ jobs:
           total_skipped=0
           outcomes_file="automerge-outcomes.jsonl"
           summary_file="automerge-summary.json"
+          security_authority_report="security-contract-approved-release.json"
+          security_authority_receipt="security-contract-approved-release-receipt.json"
           : > "${outcomes_file}"
-          org_revision="$(git rev-parse HEAD)"
-          if ! [[ "${org_revision}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "ERROR: org workflow checkout is not an exact commit." >&2
+          if ! python3 .github/scripts/security_contract_governance.py \
+            --repo . \
+            --policy .github/security-contract-governance.json \
+            audit-approved-release \
+            --report "${security_authority_report}" \
+            --receipt "${security_authority_receipt}"; then
+            echo "ERROR: the protected security contract release is not an approved immutable authority." >&2
+            exit 1
+          fi
+          if ! python3 .github/scripts/security_contract_governance.py \
+            --repo . \
+            --policy .github/security-contract-governance.json \
+            validate \
+            --report "${security_authority_report}" \
+            --receipt "${security_authority_receipt}"; then
+            echo "ERROR: approved security contract evidence is invalid." >&2
+            exit 1
+          fi
+          security_contract_revision="$(
+            jq -r '.resolution.release_revision // ""' "${security_authority_report}"
+          )"
+          if ! [[ "${security_contract_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: approved security contract revision is malformed." >&2
             exit 1
           fi
 
@@ -451,7 +475,7 @@ jobs:
                 --checks "${candidate_dir}/checks.json" \
                 --statuses "${candidate_dir}/statuses.json" \
                 --caller "${candidate_dir}/security-scan.yml" \
-                --required-security-revision "${org_revision}" \
+                --required-security-revision "${security_contract_revision}" \
                 --output "${candidate_dir}/result.json"; then
                 candidate_reason="$(jq -r '.reason // "candidate_contract_failed"' "${candidate_dir}/result.json")"
                 candidate_detail="$(jq -c '{head_sha, detail}' "${candidate_dir}/result.json")"
@@ -535,7 +559,7 @@ jobs:
                 --checks "${candidate_dir}/premerge-checks.json" \
                 --statuses "${candidate_dir}/premerge-statuses.json" \
                 --caller "${candidate_dir}/premerge-security-scan.yml" \
-                --required-security-revision "${org_revision}" \
+                --required-security-revision "${security_contract_revision}" \
                 --output "${candidate_dir}/premerge-result.json"; then
                 premerge_reason="$(jq -r '.reason // "premerge_candidate_contract_failed"' "${candidate_dir}/premerge-result.json")"
                 premerge_detail="$(jq -c '{head_sha, detail}' "${candidate_dir}/premerge-result.json")"
@@ -562,6 +586,32 @@ jobs:
                 fi
                 echo "Not merge-ready (mergeStateStatus=${merge_state}); skipping."
                 record_outcome "${REPO}" "${pr}" "${created_at}" skipped checks_not_ready true "mergeStateStatus=${merge_state}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+
+              final_authority_report="${candidate_dir}/premerge-security-contract-approved-release.json"
+              final_authority_receipt="${candidate_dir}/premerge-security-contract-approved-release-receipt.json"
+              if ! python3 .github/scripts/security_contract_governance.py \
+                --repo . \
+                --policy .github/security-contract-governance.json \
+                audit-approved-release \
+                --expected-revision "${security_contract_revision}" \
+                --report "${final_authority_report}" \
+                --receipt "${final_authority_receipt}"; then
+                echo "Approved security contract authority changed or became unverifiable; holding merge."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped approved_security_contract_unavailable true "revision=${security_contract_revision}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              if ! python3 .github/scripts/security_contract_governance.py \
+                --repo . \
+                --policy .github/security-contract-governance.json \
+                validate \
+                --report "${final_authority_report}" \
+                --receipt "${final_authority_receipt}"; then
+                echo "Final approved security contract evidence is invalid; holding merge."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped approved_security_contract_evidence_invalid true "revision=${security_contract_revision}"
                 total_skipped=$((total_skipped+1))
                 continue
               fi
@@ -662,6 +712,8 @@ jobs:
           path: |
             automerge-discovered-repositories.json
             automerge-repository-visibility.json
+            security-contract-approved-release.json
+            security-contract-approved-release-receipt.json
             automerge-outcomes.jsonl
             automerge-summary.json
             automerge-candidates/

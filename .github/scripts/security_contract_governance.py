@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 
 TOOL_NAME = "security-contract-governance"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 SCHEMA_VERSION = 1
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
@@ -365,42 +365,32 @@ def python_dependencies(path: str, content: bytes, local_modules: dict[str, str]
     return dependencies
 
 
-def resolve_bundle(repo: Path, policy: Policy, main_ref: str) -> dict[str, Any]:
-    main_revision = exact_revision(repo, main_ref)
-    candidate = str(
-        run_git(
-            repo,
-            ["rev-list", "-1", main_revision, "--", *sorted(policy.paths)],
-        )
-    ).strip()
-    if SHA40.fullmatch(candidate) is None:
-        raise GovernanceError("no release commit changes the declared bundle")
+def resolve_bundle_revision(
+    repo: Path, policy: Policy, revision: str
+) -> dict[str, Any]:
+    revision = exact_revision(repo, revision)
     contents: dict[str, bytes] = {}
     files: list[dict[str, Any]] = []
     for path, required_mode in policy.paths.items():
-        release_entry = tree_entry(repo, candidate, path)
-        main_entry = tree_entry(repo, main_revision, path)
-        for location, entry in (("release", release_entry), ("main", main_entry)):
-            if entry.object_type != "blob" or entry.mode != required_mode:
-                raise GovernanceError(
-                    f"{location} bundle path must be a regular {required_mode} blob: {path}"
-                )
-        if release_entry.oid != main_entry.oid:
-            raise GovernanceError(f"bundle bytes at main differ from the resolved release: {path}")
-        content = blob(repo, candidate, path)
+        entry = tree_entry(repo, revision, path)
+        if entry.object_type != "blob" or entry.mode != required_mode:
+            raise GovernanceError(
+                f"bundle path must be a regular {required_mode} blob: {path}"
+            )
+        content = blob(repo, revision, path)
         contents[path] = content
         files.append(
             {
                 "path": path,
-                "mode": release_entry.mode,
-                "git_blob": release_entry.oid,
+                "mode": entry.mode,
+                "git_blob": entry.oid,
                 "sha256": sha256(content),
                 "size_bytes": len(content),
             }
         )
     workflow_text = contents[policy.entrypoint].decode("utf-8")
     workflow_dependencies = set(WORKFLOW_SCRIPT.findall(workflow_text))
-    local_modules = local_python_modules(repo, candidate, policy.python_roots)
+    local_modules = local_python_modules(repo, revision, policy.python_roots)
     python_deps: set[str] = set()
     for path, content in contents.items():
         if path.endswith(".py"):
@@ -414,10 +404,54 @@ def resolve_bundle(repo: Path, policy: Policy, main_ref: str) -> dict[str, Any]:
             f"bundle manifest is not closed (undeclared={missing}, unreachable={excess})"
         )
     return {
-        "default_revision": main_revision,
-        "release_revision": candidate,
         "manifest_closed": True,
         "files": files,
+    }
+
+
+def resolve_bundle(repo: Path, policy: Policy, main_ref: str) -> dict[str, Any]:
+    main_revision = exact_revision(repo, main_ref)
+    candidate = str(
+        run_git(
+            repo,
+            ["rev-list", "-1", main_revision, "--", *sorted(policy.paths)],
+        )
+    ).strip()
+    if SHA40.fullmatch(candidate) is None:
+        raise GovernanceError("no release commit changes the declared bundle")
+    resolved = resolve_bundle_revision(repo, policy, candidate)
+    for path, required_mode in policy.paths.items():
+        release_entry = tree_entry(repo, candidate, path)
+        main_entry = tree_entry(repo, main_revision, path)
+        for location, entry in (("release", release_entry), ("main", main_entry)):
+            if entry.object_type != "blob" or entry.mode != required_mode:
+                raise GovernanceError(
+                    f"{location} bundle path must be a regular {required_mode} blob: {path}"
+                )
+        if release_entry.oid != main_entry.oid:
+            raise GovernanceError(
+                f"bundle bytes at main differ from the resolved release: {path}"
+            )
+    return {
+        "default_revision": main_revision,
+        "release_revision": candidate,
+        **resolved,
+    }
+
+
+def resolve_approved_release(
+    client: GitHub, repo: Path, policy: Policy
+) -> dict[str, Any]:
+    """Resolve the protected release ref without treating mutable main as content authority."""
+    default_revision = read_branch_ref(client, policy, policy.default_branch)
+    release_revision = read_branch_ref(client, policy, policy.release_branch)
+    if default_revision is None or release_revision is None:
+        raise GovernanceError("approved security contract refs are unavailable")
+    resolved = resolve_bundle_revision(repo, policy, release_revision)
+    return {
+        "default_revision": default_revision,
+        "release_revision": release_revision,
+        **resolved,
     }
 
 
@@ -609,6 +643,29 @@ def audit_authority(
         authority[field] = protection
         findings.extend(protection_findings)
     return authority, findings
+
+
+def audit_approved_release(
+    client: GitHub,
+    repo: Path,
+    policy: Policy,
+    expected_revision: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, str]]]:
+    if expected_revision is not None and SHA40.fullmatch(expected_revision) is None:
+        raise GovernanceError("expected release revision must be one exact commit SHA")
+    resolution = resolve_approved_release(client, repo, policy)
+    authority, findings = audit_authority(client, policy, resolution)
+    if (
+        expected_revision is not None
+        and resolution["release_revision"] != expected_revision
+    ):
+        findings.append(
+            finding(
+                "approved_release_advanced",
+                "protected release ref changed after initial authorization",
+            )
+        )
+    return resolution, authority, findings
 
 
 def build_report(
@@ -1034,6 +1091,13 @@ def parser() -> argparse.ArgumentParser:
     audit.add_argument("--main-ref", default="origin/main")
     audit.add_argument("--report", type=Path, required=True)
     audit.add_argument("--receipt", type=Path, required=True)
+    approved = commands.add_parser(
+        "audit-approved-release",
+        help="Audit the immutable protected release ref used by automerge.",
+    )
+    approved.add_argument("--expected-revision")
+    approved.add_argument("--report", type=Path, required=True)
+    approved.add_argument("--receipt", type=Path, required=True)
     validate = commands.add_parser("validate", help="Validate retained audit evidence.")
     validate.add_argument("--report", type=Path, required=True)
     validate.add_argument("--receipt", type=Path, required=True)
@@ -1056,6 +1120,14 @@ def main() -> int:
         if args.command == "audit":
             resolution = resolve_bundle(repo, policy, args.main_ref)
             authority, findings = audit_authority(client, policy, resolution)
+            report = build_report(policy, resolution, authority, findings)
+            write_atomic(args.report, report)
+            write_atomic(args.receipt, build_receipt(policy, args.report, report))
+            return 0 if not findings else 1
+        if args.command == "audit-approved-release":
+            resolution, authority, findings = audit_approved_release(
+                client, repo, policy, args.expected_revision
+            )
             report = build_report(policy, resolution, authority, findings)
             write_atomic(args.report, report)
             write_atomic(args.receipt, build_receipt(policy, args.report, report))

@@ -127,6 +127,42 @@ class GovernanceContractTests(unittest.TestCase):
         )
         self.assertTrue(all(item["mode"] == "100644" for item in self.resolution["files"]))
 
+    def test_automerge_authority_resolves_the_immutable_protected_release(self):
+        resolution, authority, findings = governance.audit_approved_release(
+            FixtureClient(), REPO_ROOT, self.policy
+        )
+        self.assertEqual(findings, [])
+        self.assertEqual(
+            resolution["release_revision"],
+            "032d7dc24158b3c7fe52c393028b71d5c030ffdd",
+        )
+        self.assertEqual(
+            resolution["default_revision"],
+            governance.exact_revision(REPO_ROOT, TEST_REVISION),
+        )
+        self.assertTrue(resolution["manifest_closed"])
+        self.assertTrue(authority["release_ref_exact"])
+        self.assertTrue(authority["release_commit_signature_verified"])
+        self.assertTrue(authority["release_protection"]["contract_exact"])
+
+    def test_automerge_authority_rejects_release_movement_between_checks(self):
+        resolution, _, findings = governance.audit_approved_release(
+            FixtureClient(), REPO_ROOT, self.policy, "1" * 40
+        )
+        self.assertEqual(
+            resolution["release_revision"],
+            "032d7dc24158b3c7fe52c393028b71d5c030ffdd",
+        )
+        self.assertIn(
+            "approved_release_advanced", {item["code"] for item in findings}
+        )
+
+    def test_automerge_authority_rejects_a_malformed_expected_revision(self):
+        with self.assertRaisesRegex(governance.GovernanceError, "exact commit SHA"):
+            governance.audit_approved_release(
+                FixtureClient(), REPO_ROOT, self.policy, "security-contract-v1"
+            )
+
     def test_missing_release_ref_fails_visibly(self):
         authority, findings = governance.audit_authority(
             FixtureClient(missing_release=True), self.policy, self.resolution

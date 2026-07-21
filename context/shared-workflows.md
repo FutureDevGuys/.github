@@ -161,6 +161,12 @@ both branches. It records required status checks as intentionally absent while
 Actions billing blocks job admission. WHEN runner admission is restored THEN
 you SHALL update the policy and tests before claiming any required check.
 
+The automerge sweep uses the same governance policy but resolves bundle bytes
+directly at the protected release SHA. It audits that authority before examining
+candidates and again immediately before a merge, with the initially approved
+SHA as an exact postcondition. It does not substitute the current `main` or the
+workflow checkout SHA for the caller's required security revision.
+
 The release helper separates planning from apply. Its digest binds the policy,
 `main`, resolved release commit, observed release ref, and ordered operations.
 Existing releases move only by a non-force fast-forward after protection is

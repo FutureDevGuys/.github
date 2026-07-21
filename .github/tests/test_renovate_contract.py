@@ -232,6 +232,24 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertIn('--required-revision "${policy_revision}"', adoption_job)
         self.assertNotIn("--required-revision ${{ github.sha }}", adoption_job)
 
+    def test_automerge_uses_the_approved_immutable_release_revision(self):
+        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertEqual(workflow.count("audit-approved-release"), 2)
+        self.assertIn('--expected-revision "${security_contract_revision}"', workflow)
+        self.assertEqual(
+            workflow.count(
+                '--required-security-revision "${security_contract_revision}"'
+            ),
+            2,
+        )
+        self.assertNotIn('org_revision="$(git rev-parse HEAD)"', workflow)
+        self.assertNotIn("--main-ref", workflow)
+        self.assertIn("security-contract-approved-release.json", workflow)
+        self.assertIn("security-contract-approved-release-receipt.json", workflow)
+
     def test_semantic_cooldowns_and_major_holds_are_explicit(self):
         preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
         rules = preset["packageRules"]
