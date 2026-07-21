@@ -52,11 +52,11 @@ def report_evidence(path: Path) -> tuple[dict[str, Any] | None, dict[str, int]]:
         if isinstance(payload, dict):
             report_schema_version = payload.get("SchemaVersion")
             results = payload.get("Results")
-            json_valid = (
+            if (
                 report_schema_version == TRIVY_SCHEMA_VERSION
                 and isinstance(results, list)
-            )
-            if json_valid:
+            ):
+                json_valid = True
                 results_count = len(results)
                 for result in results:
                     if not isinstance(result, dict):

@@ -18,6 +18,29 @@ from typing import Any, Protocol
 from urllib.parse import quote
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from renovate_config_authority import inspect_config_sources  # noqa: E402
+from security_scan_adoption_contract import (  # noqa: E402
+    COMMIT_RE,
+    RECEIPT_SCHEMA_VERSION,
+    REPORT_SCHEMA_VERSION,
+    TOOL_NAME,
+    TOOL_VERSION,
+    canonical_findings,
+    canonical_json,
+    digest,
+)
+from security_scan_adoption_evidence import validate_evidence  # noqa: E402
+from security_scan_adoption_lifecycle import (  # noqa: E402
+    PolicyError,
+    classify_repository,
+    validate_policy,
+)
+
+
 USES_RE = re.compile(
     r"^\s+uses:\s+FutureDevGuys/\.github/\.github/workflows/security-scan\.yml@([0-9a-f]{40})\s*$",
     re.MULTILINE,
@@ -26,7 +49,6 @@ REVISION_RE = re.compile(
     r"^      workflow_revision:\s*[\"']?([0-9a-f]{40})[\"']?\s*$",
     re.MULTILINE,
 )
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 HTTP_STATUS_RE = re.compile(r"HTTP\s+([0-9]{3})")
 FORBIDDEN_AUTOMERGE_KEYS = {"automergeType", "automergeStrategy"}
 ORG_CANDIDATE_LABEL = "automerge-candidate"
@@ -46,12 +68,6 @@ APPROVED_SHARED_EXTENDS = [
     "helpers:pinGitHubActionDigests",
     "mergeConfidence:all-badges",
 ]
-REPORT_SCHEMA_VERSION = 1
-RECEIPT_SCHEMA_VERSION = 1
-TOOL_NAME = "security-scan-adoption-audit"
-TOOL_VERSION = "2.0.0"
-
-
 class AdoptionError(RuntimeError):
     """Discovery, policy, evidence, or remote content is not trustworthy."""
 
@@ -434,14 +450,6 @@ def effective_config_proof(
     return proof, [*shared_errors, *local_errors]
 
 
-def canonical_json(value: Any) -> bytes:
-    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
-
-
-def digest(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
 def write_atomic(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(
@@ -482,70 +490,6 @@ def load_json_object(path: Path, label: str) -> dict[str, Any]:
 def exact_keys(value: dict[str, Any], expected: set[str], label: str) -> None:
     if set(value) != expected:
         raise AdoptionError(f"{label} keys must be exactly {sorted(expected)}")
-
-
-def load_policy(path: Path) -> dict[str, Any]:
-    policy = load_json_object(path, "adoption policy")
-    exact_keys(
-        policy,
-        {
-            "schema_version",
-            "organization",
-            "default_lifecycle",
-            "lifecycle_overrides",
-            "requirements",
-        },
-        "policy",
-    )
-    if policy["schema_version"] != 2 or policy["default_lifecycle"] != "active":
-        raise AdoptionError("policy schema or default lifecycle is unsupported")
-    organization = policy["organization"]
-    overrides = policy["lifecycle_overrides"]
-    requirements = policy["requirements"]
-    if not isinstance(organization, dict):
-        raise AdoptionError("policy.organization must be an object")
-    exact_keys(organization, {"login", "id", "node_id"}, "policy.organization")
-    if (
-        organization.get("login") != "FutureDevGuys"
-        or not isinstance(organization.get("id"), int)
-        or not isinstance(organization.get("node_id"), str)
-    ):
-        raise AdoptionError("policy organization identity is invalid")
-    if not isinstance(overrides, dict) or not isinstance(requirements, dict):
-        raise AdoptionError("policy lifecycle overrides and requirements must be objects")
-    expected_requirements = {
-        "active": {
-            "security_scan": "required",
-            "renovate_config": "validate_if_present",
-        },
-        "authority": {
-            "security_scan": "provider",
-            "renovate_config": "not_applicable",
-        },
-        "archived": {
-            "security_scan": "not_applicable",
-            "renovate_config": "not_applicable",
-        },
-    }
-    if requirements != expected_requirements:
-        raise AdoptionError("policy lifecycle requirements are not exact")
-    for repository, override in overrides.items():
-        if not isinstance(repository, str) or not repository.startswith("FutureDevGuys/"):
-            raise AdoptionError("policy lifecycle override repository is invalid")
-        if not isinstance(override, dict):
-            raise AdoptionError(f"override for {repository} must be an object")
-        exact_keys(
-            override,
-            {"repository_id", "node_id", "lifecycle"},
-            f"override {repository}",
-        )
-        if (
-            not isinstance(override.get("repository_id"), int)
-            or not isinstance(override.get("node_id"), str)
-            or override.get("lifecycle") not in {"authority", "archived"}
-        ):
-            raise AdoptionError(f"override for {repository} is invalid")
-    return policy
 
 
 class GitHubProvider:
@@ -741,30 +685,6 @@ def normalized_repository(repository: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
-def classify_repository(
-    repository: dict[str, Any], policy: dict[str, Any]
-) -> tuple[str, list[str]]:
-    name = repository["full_name"]
-    override = policy["lifecycle_overrides"].get(name)
-    findings: list[str] = []
-    if override is None:
-        if repository["archived"]:
-            findings.append("archived repository lacks an explicit lifecycle override")
-            return "archived", findings
-        return policy["default_lifecycle"], findings
-    if (
-        repository["id"] != override["repository_id"]
-        or repository["node_id"] != override["node_id"]
-    ):
-        findings.append("repository identity differs from lifecycle override")
-    lifecycle = override["lifecycle"]
-    if lifecycle == "archived" and not repository["archived"]:
-        findings.append("repository is classified archived but live metadata is active")
-    if lifecycle == "authority" and repository["archived"]:
-        findings.append("authority repository must not be archived")
-    return lifecycle, findings
-
-
 def audit_adoption(
     provider: InventoryProvider,
     policy_path: Path,
@@ -773,7 +693,10 @@ def audit_adoption(
 ) -> dict[str, Any]:
     if COMMIT_RE.fullmatch(required_revision) is None:
         raise AdoptionError("required revision must be one exact commit SHA")
-    policy = load_policy(policy_path)
+    try:
+        policy = validate_policy(load_json_object(policy_path, "adoption policy"))
+    except PolicyError as error:
+        raise AdoptionError(str(error)) from error
     shared_preset_text = shared_preset_path.read_text(encoding="utf-8")
     organization = provider.organization()
     repositories = [normalized_repository(row) for row in provider.repositories()]
@@ -781,14 +704,14 @@ def audit_adoption(
     names = [row["full_name"] for row in repositories]
     if len(names) != len(set(names)):
         raise AdoptionError("paginated repository inventory contains duplicates")
-    findings: list[str] = []
+    global_findings: list[str] = []
     expected_organization = policy["organization"]
     organization_exact = all(
         organization.get(key) == expected_organization[key]
         for key in ("login", "id", "node_id")
     )
     if not organization_exact:
-        findings.append("organization identity differs from policy")
+        global_findings.append("organization identity differs from policy")
     public_repos = organization.get("public_repos")
     private_repos = organization.get("total_private_repos")
     expected_count = (
@@ -801,25 +724,25 @@ def audit_adoption(
     )
     count_exact = expected_count == len(repositories)
     if not count_exact:
-        findings.append("paginated repository count does not match organization totals")
-    for repository in repositories:
-        if repository["owner"] != expected_organization:
-            findings.append(f"{repository['full_name']}: owner identity differs from policy")
-        if not repository["full_name"].startswith("FutureDevGuys/"):
-            findings.append(f"{repository['full_name']}: repository is outside the organization")
+        global_findings.append(
+            "paginated repository count does not match organization totals"
+        )
     missing_overrides = sorted(set(policy["lifecycle_overrides"]) - set(names))
     for repository in missing_overrides:
-        findings.append(f"{repository}: lifecycle override is absent from discovery")
+        global_findings.append(
+            f"{repository}: lifecycle override is absent from discovery"
+        )
 
     rows: list[dict[str, Any]] = []
     for repository in repositories:
         name = repository["full_name"]
         lifecycle, lifecycle_findings = classify_repository(repository, policy)
-        row_findings = [f"{name}: {message}" for message in lifecycle_findings]
-        if repository["disabled"]:
-            row_findings.append(f"{name}: repository is disabled")
+        security_findings: list[str] = []
+        renovate_findings: list[str] = []
         caller_status = "not_applicable"
         renovate_status = "not_applicable"
+        caller_evidence: dict[str, Any] | None = None
+        config_sources: list[dict[str, Any]] | None = None
         proof: dict[str, Any] | None = None
         default_revision: str | None = None
         if lifecycle == "active":
@@ -833,66 +756,97 @@ def audit_adoption(
                     )
                 default_revision = candidate_revision
             except ContentUnavailable as error:
-                row_findings.append(f"{name}: {error}")
+                lifecycle_findings = canonical_findings(
+                    [*lifecycle_findings, str(error)]
+                )
             ref = default_revision
             if ref is None:
                 caller_status = "unknown"
                 renovate_status = "unknown"
-                findings.extend(row_findings)
-                rows.append(
-                    {
-                        **repository,
-                        "default_revision": None,
-                        "lifecycle": lifecycle,
-                        "security_scan": caller_status,
-                        "renovate_effective_config": renovate_status,
-                        "effective_config_proof": proof,
-                        "findings": row_findings,
-                    }
-                )
-                continue
-            try:
-                caller = provider.file(
-                    name, ref, ".github/workflows/security-scan.yml"
-                )
-            except ContentUnavailable as error:
-                caller = None
-                row_findings.append(f"{name}: {error}")
-            if caller is None:
-                caller_status = "missing"
-                row_findings.append(f"{name}: security-scan caller is missing")
             else:
-                caller_errors = validate_caller(caller, required_revision)
-                caller_status = "pass" if not caller_errors else "fail"
-                row_findings.extend(f"{name}: {error}" for error in caller_errors)
-            try:
-                local_config = provider.file(name, ref, "renovate.json")
-            except ContentUnavailable as error:
-                local_config = None
-                row_findings.append(f"{name}: {error}")
-            if local_config is None:
-                local_config = "{}\n"
-                renovate_status = "absent_pass"
-            proof, effective_errors = effective_config_proof(
-                shared_preset_text, local_config
-            )
-            if effective_errors:
-                renovate_status = "fail"
-                row_findings.extend(f"{name}: {error}" for error in effective_errors)
-            elif renovate_status != "absent_pass":
-                renovate_status = "pass"
-        findings.extend(row_findings)
+                try:
+                    caller = provider.file(
+                        name, ref, ".github/workflows/security-scan.yml"
+                    )
+                except ContentUnavailable as error:
+                    caller = None
+                    caller_evidence = {
+                        "state": "unknown",
+                        "sha256": None,
+                    }
+                    security_findings.append(str(error))
+                    caller_status = "unknown"
+                else:
+                    if caller is None:
+                        caller_evidence = {"state": "absent", "sha256": None}
+                        security_findings.append("security-scan caller is missing")
+                        caller_status = "missing"
+                    else:
+                        caller_evidence = {
+                            "state": "present",
+                            "sha256": digest(caller.encode("utf-8")),
+                        }
+                        security_findings.extend(
+                            validate_caller(caller, required_revision)
+                        )
+                        caller_status = "fail" if security_findings else "pass"
+                def read_config(path: str) -> tuple[str | None, str | None]:
+                    try:
+                        return provider.file(name, ref, path), None
+                    except ContentUnavailable as error:
+                        return None, str(error)
+
+                config_sources, local_config, source_findings = inspect_config_sources(
+                    read_config
+                )
+                renovate_findings.extend(source_findings)
+                if any(source["state"] == "unknown" for source in config_sources):
+                    renovate_status = "unknown"
+                else:
+                    canonical_source = config_sources[0]
+                    effective_text = local_config if local_config is not None else "{}\n"
+                    proof, effective_errors = effective_config_proof(
+                        shared_preset_text, effective_text
+                    )
+                    renovate_findings.extend(effective_errors)
+                    if renovate_findings:
+                        renovate_status = "fail"
+                    elif canonical_source["state"] == "present":
+                        renovate_status = "pass"
+                    else:
+                        renovate_status = "absent_pass"
+        security_findings = canonical_findings(security_findings)
+        renovate_findings = canonical_findings(renovate_findings)
+        row_findings = canonical_findings(
+            [
+                *(f"{name}: {finding}" for finding in lifecycle_findings),
+                *(f"{name}: {finding}" for finding in security_findings),
+                *(f"{name}: {finding}" for finding in renovate_findings),
+            ]
+        )
         rows.append(
             {
                 **repository,
                 "default_revision": default_revision,
                 "lifecycle": lifecycle,
                 "security_scan": caller_status,
+                "security_scan_caller": caller_evidence,
+                "security_scan_findings": security_findings,
                 "renovate_effective_config": renovate_status,
+                "renovate_config_sources": config_sources,
+                "renovate_config_findings": renovate_findings,
                 "effective_config_proof": proof,
+                "lifecycle_findings": lifecycle_findings,
                 "findings": row_findings,
             }
         )
+    global_findings = canonical_findings(global_findings)
+    findings = canonical_findings(
+        [
+            *global_findings,
+            *(finding for row in rows for finding in row["findings"]),
+        ]
+    )
     inventory_bytes = canonical_json(repositories)
     active_revisions = [
         {
@@ -903,6 +857,16 @@ def audit_adoption(
         if row["lifecycle"] == "active"
     ]
     active_revisions_bytes = canonical_json(active_revisions)
+    renovate_config_sources = [
+        {
+            "repository": row["full_name"],
+            "revision": row["default_revision"],
+            "sources": row["renovate_config_sources"],
+        }
+        for row in rows
+        if row["lifecycle"] == "active"
+    ]
+    renovate_config_sources_bytes = canonical_json(renovate_config_sources)
     result = {"status": "pass" if not findings else "fail", "finding_count": len(findings)}
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -916,14 +880,25 @@ def audit_adoption(
             "required_revision": required_revision,
             "shared_preset_sha256": digest(shared_preset_text.encode("utf-8")),
             "active_revisions_sha256": digest(active_revisions_bytes),
+            "renovate_config_sources_sha256": digest(
+                renovate_config_sources_bytes
+            ),
         },
         "visibility": {
+            "organization": {
+                key: organization.get(key) for key in ("login", "id", "node_id")
+            },
+            "organization_repository_counts": {
+                "public": public_repos,
+                "private": private_repos,
+            },
             "organization_identity_exact": organization_exact,
             "expected_repository_count": expected_count,
             "discovered_repository_count": len(repositories),
             "repository_count_exact": count_exact,
             "paginated": True,
             "inventory_sha256": digest(inventory_bytes),
+            "missing_lifecycle_overrides": missing_overrides,
             "complete": organization_exact
             and count_exact
             and not missing_overrides,
@@ -948,6 +923,9 @@ def build_receipt(report_path: Path, report: dict[str, Any]) -> dict[str, Any]:
             "active_revisions_sha256": report["inputs"][
                 "active_revisions_sha256"
             ],
+            "renovate_config_sources_sha256": report["inputs"][
+                "renovate_config_sources_sha256"
+            ],
             "repository_count": report["visibility"]["discovered_repository_count"],
         },
         "result": report["result"],
@@ -957,124 +935,6 @@ def build_receipt(report_path: Path, report: dict[str, Any]) -> dict[str, Any]:
             "size_bytes": len(raw),
         },
     }
-
-
-def validate_evidence(report_path: Path, receipt_path: Path) -> list[str]:
-    try:
-        report = load_json_object(report_path, "adoption report")
-        receipt = load_json_object(receipt_path, "adoption receipt")
-    except AdoptionError as error:
-        return [str(error)]
-    errors: list[str] = []
-    if report.get("schema_version") != REPORT_SCHEMA_VERSION or report.get("executed") is not True:
-        errors.append("report does not prove execution")
-    visibility = report.get("visibility")
-    repositories = report.get("repositories")
-    if not isinstance(visibility, dict) or not isinstance(repositories, list):
-        errors.append("report visibility or repositories are missing")
-    else:
-        if visibility.get("paginated") is not True:
-            errors.append("report does not prove paginated discovery")
-        normalized = [
-            {
-                key: row[key]
-                for key in (
-                    "full_name",
-                    "id",
-                    "node_id",
-                    "archived",
-                    "disabled",
-                    "private",
-                    "visibility",
-                    "default_branch",
-                    "owner",
-                )
-            }
-            for row in repositories
-            if isinstance(row, dict)
-            and all(
-                key in row
-                for key in (
-                    "full_name",
-                    "id",
-                    "node_id",
-                    "archived",
-                    "disabled",
-                    "private",
-                    "visibility",
-                    "default_branch",
-                    "owner",
-                )
-            )
-        ]
-        if len(normalized) != len(repositories):
-            errors.append("report repository inventory is malformed")
-        elif visibility.get("inventory_sha256") != digest(canonical_json(normalized)):
-            errors.append("report repository inventory digest does not match")
-        if visibility.get("discovered_repository_count") != len(repositories):
-            errors.append("report repository count does not match inventory")
-        if visibility.get("complete") is not True:
-            errors.append("report does not prove complete organization visibility")
-        active_revisions: list[dict[str, str]] = []
-        for row in repositories:
-            if not isinstance(row, dict) or row.get("lifecycle") != "active":
-                continue
-            revision = row.get("default_revision")
-            if not isinstance(revision, str) or COMMIT_RE.fullmatch(revision) is None:
-                errors.append(
-                    "active repository does not bind one exact default revision"
-                )
-                continue
-            active_revisions.append(
-                {"repository": row["full_name"], "revision": revision}
-            )
-        inputs = report.get("inputs")
-        if (
-            not isinstance(inputs, dict)
-            or inputs.get("active_revisions_sha256")
-            != digest(canonical_json(active_revisions))
-        ):
-            errors.append("report active revision digest does not match")
-    raw = report_path.read_bytes()
-    artifact = receipt.get("artifact")
-    if not isinstance(artifact, dict):
-        errors.append("receipt artifact binding is missing")
-    else:
-        if artifact.get("path") != report_path.name:
-            errors.append("receipt artifact path does not match")
-        if artifact.get("sha256") != digest(raw):
-            errors.append("receipt artifact digest does not match")
-        if artifact.get("size_bytes") != len(raw):
-            errors.append("receipt artifact size does not match")
-    expected_inputs = {
-        "policy_sha256": report.get("policy", {}).get("sha256")
-        if isinstance(report.get("policy"), dict)
-        else None,
-        "required_revision": report.get("inputs", {}).get("required_revision")
-        if isinstance(report.get("inputs"), dict)
-        else None,
-        "shared_preset_sha256": report.get("inputs", {}).get("shared_preset_sha256")
-        if isinstance(report.get("inputs"), dict)
-        else None,
-        "inventory_sha256": visibility.get("inventory_sha256")
-        if isinstance(visibility, dict)
-        else None,
-        "active_revisions_sha256": report.get("inputs", {}).get(
-            "active_revisions_sha256"
-        )
-        if isinstance(report.get("inputs"), dict)
-        else None,
-        "repository_count": visibility.get("discovered_repository_count")
-        if isinstance(visibility, dict)
-        else None,
-    }
-    if receipt.get("inputs") != expected_inputs:
-        errors.append("receipt inputs do not bind report inputs")
-    if receipt.get("result") != report.get("result") or receipt.get("executed") is not True:
-        errors.append("receipt does not bind executed report result")
-    if report.get("result") != {"status": "pass", "finding_count": 0}:
-        errors.append("adoption audit result is not pass")
-    return errors
 
 
 def parse_args() -> argparse.Namespace:
@@ -1101,7 +961,7 @@ def main() -> int:
     args = parse_args()
     try:
         if args.command == "validate":
-            errors = validate_evidence(args.report, args.receipt)
+            errors = validate_evidence(args.report, args.receipt, args.manifest)
             for error in errors:
                 print(f"ERROR: {error}", file=sys.stderr)
             return 1 if errors else 0

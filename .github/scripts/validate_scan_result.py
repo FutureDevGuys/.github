@@ -228,8 +228,10 @@ def main() -> int:
     except FileNotFoundError:
         print(f"ERROR: scan receipt is missing: {args.receipt}", file=sys.stderr)
         return 1
-    except json.JSONDecodeError as error:
-        print(f"ERROR: scan receipt is invalid JSON: {error}", file=sys.stderr)
+    except json.JSONDecodeError as parse_error:
+        print(
+            f"ERROR: scan receipt is invalid JSON: {parse_error}", file=sys.stderr
+        )
         return 1
     expected_input = {
         "repository": args.repository,
@@ -240,8 +242,8 @@ def main() -> int:
     }
     errors = validate_receipt(receipt, args.report, expected_input)
     if errors:
-        for error in errors:
-            print(f"ERROR: {error}", file=sys.stderr)
+        for validation_error in errors:
+            print(f"ERROR: {validation_error}", file=sys.stderr)
         return 1
     print("Trivy receipt proves a clean, completed scan.")
     return 0
