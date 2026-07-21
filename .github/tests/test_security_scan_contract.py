@@ -448,6 +448,34 @@ class LocalRenovateContractTests(unittest.TestCase):
             errors,
         )
 
+    def test_local_config_cannot_hide_preset_controls_in_nested_scopes(self):
+        cases = (
+            (
+                {"extends": ["github>attacker/preset:default"]},
+                "renovate.packageRules[0].extends must be absent or empty; repository policy cannot inherit unapproved presets",
+            ),
+            (
+                {"ignorePresets": ["github>FutureDevGuys/.github:renovate-config"]},
+                "renovate.packageRules[0].ignorePresets must not be present; the organization preset is mandatory",
+            ),
+            (
+                {"globalExtends": ["github>attacker/preset:default"]},
+                "renovate.packageRules[0].globalExtends must not be present; repository policy cannot change preset resolution",
+            ),
+        )
+        for nested, expected in cases:
+            with self.subTest(control=next(iter(nested))):
+                errors = adoption.validate_renovate_config(
+                    json.dumps({"packageRules": [nested]})
+                )
+                self.assertIn(expected, errors)
+
+    def test_local_extends_null_is_not_treated_as_absent(self):
+        self.assertIn(
+            "renovate.extends must be absent or empty; repository policy cannot inherit unapproved presets",
+            adoption.validate_renovate_config('{"extends": null}'),
+        )
+
     def test_local_config_cannot_remove_org_block_label(self):
         errors = adoption.validate_renovate_config(
             '{"packageRules": [{"removeLabels": ["migration-required"]}]}'
@@ -517,6 +545,27 @@ class LocalRenovateContractTests(unittest.TestCase):
         self.assertFalse(proof["local_candidate_label_forbidden"])
         self.assertFalse(proof["reserved_label_removal_forbidden"])
 
+    def test_effective_config_proof_rejects_nested_preset_neutralizers(self):
+        shared = (REPO_ROOT / "renovate-config.json").read_text(encoding="utf-8")
+        for control in ("extends", "ignorePresets", "globalExtends"):
+            with self.subTest(control=control):
+                proof, errors = adoption.effective_config_proof(
+                    shared,
+                    json.dumps(
+                        {
+                            "packageRules": [
+                                {
+                                    control: [
+                                        "github>attacker/preset:default"
+                                    ]
+                                }
+                            ]
+                        }
+                    ),
+                )
+                self.assertTrue(errors)
+                self.assertFalse(proof["local_extends_closed"])
+
     def test_shared_preset_cannot_enable_merge_or_add_escape_hatches(self):
         shared = json.loads(
             (REPO_ROOT / "renovate-config.json").read_text(encoding="utf-8")
@@ -525,7 +574,7 @@ class LocalRenovateContractTests(unittest.TestCase):
         shared["packageRules"].append({"automerge": True})
         _, errors = adoption.validate_shared_preset(json.dumps(shared))
         self.assertIn(
-            "shared preset must not contain inherited-preset escape hatches",
+            "shared.ignorePresets must not be present; shared preset resolution is closed",
             errors,
         )
         self.assertTrue(
@@ -534,6 +583,32 @@ class LocalRenovateContractTests(unittest.TestCase):
                 and error.endswith(".automerge must not enable Renovate merging")
                 for error in errors
             )
+        )
+
+    def test_shared_preset_cannot_hide_inheritance_in_package_rules(self):
+        shared = json.loads(
+            (REPO_ROOT / "renovate-config.json").read_text(encoding="utf-8")
+        )
+        shared["packageRules"].append(
+            {
+                "extends": ["github>attacker/preset:default"],
+                "ignorePresets": ["config:recommended"],
+                "globalExtends": ["github>attacker/global:default"],
+            }
+        )
+        _, errors = adoption.validate_shared_preset(json.dumps(shared))
+        index = len(shared["packageRules"]) - 1
+        self.assertIn(
+            f"shared.packageRules[{index}].extends must not be present; nested shared preset inheritance is forbidden",
+            errors,
+        )
+        self.assertIn(
+            f"shared.packageRules[{index}].ignorePresets must not be present; shared preset resolution is closed",
+            errors,
+        )
+        self.assertIn(
+            f"shared.packageRules[{index}].globalExtends must not be present; shared preset resolution is closed",
+            errors,
         )
 
 

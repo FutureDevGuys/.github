@@ -166,6 +166,28 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertEqual(len(set(matches)), 1)
         self.assertEqual("@".join(matches[0]), EXPECTED_RENOVATE_RUNTIME)
 
+        replacement = "99.88.77@sha256:" + "a" * 64
+        updated_sources: list[str] = []
+        for source in (workflow, test_source):
+            updated = source
+            for pattern in manager["matchStrings"]:
+                normalized = (
+                    pattern.replace("(?<datasource>", "(?P<datasource>")
+                    .replace("(?<depName>", "(?P<depName>")
+                    .replace("(?<currentValue>", "(?P<currentValue>")
+                    .replace("(?<currentDigest>", "(?P<currentDigest>")
+                )
+                updated = re.sub(
+                    normalized,
+                    lambda match: match.group(0)
+                    .replace(match.group("currentValue"), replacement.split("@", 1)[0])
+                    .replace(match.group("currentDigest"), replacement.split("@", 1)[1]),
+                    updated,
+                )
+            updated_sources.append(updated)
+        self.assertEqual(sum(source.count(replacement) for source in updated_sources), 3)
+        self.assertNotIn(EXPECTED_RENOVATE_RUNTIME, "".join(updated_sources))
+
     def test_runtime_config_rejects_mutable_shared_preset(self):
         command = [
             "node",

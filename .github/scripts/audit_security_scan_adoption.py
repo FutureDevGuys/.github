@@ -261,20 +261,26 @@ def validate_renovate_config(text: str) -> list[str]:
         return ["renovate.json root must be an object"]
 
     errors: list[str] = []
-    extends = config.get("extends")
-    if extends not in (None, []):
-        errors.append(
-            "renovate.extends must be absent or empty; repository policy cannot inherit unapproved presets"
-        )
-    if "ignorePresets" in config:
-        errors.append(
-            "renovate.ignorePresets must not be present; the organization preset is mandatory"
-        )
 
     def visit(value: object, path: str) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
                 child_path = f"{path}.{key}"
+                if key == "extends" and child != []:
+                    errors.append(
+                        f"{child_path} must be absent or empty; repository policy "
+                        "cannot inherit unapproved presets"
+                    )
+                if key == "ignorePresets":
+                    errors.append(
+                        f"{child_path} must not be present; the organization preset "
+                        "is mandatory"
+                    )
+                if key == "globalExtends":
+                    errors.append(
+                        f"{child_path} must not be present; repository policy cannot "
+                        "change preset resolution"
+                    )
                 if key in {"automerge", "platformAutomerge"} and child is True:
                     errors.append(f"{child_path} must not enable Renovate merging")
                 if key in FORBIDDEN_AUTOMERGE_KEYS:
@@ -317,8 +323,6 @@ def validate_shared_preset(text: str) -> tuple[dict[str, Any] | None, list[str]]
     if not isinstance(preset, dict):
         return None, ["shared preset root must be an object"]
     errors: list[str] = []
-    if "ignorePresets" in preset or "globalExtends" in preset:
-        errors.append("shared preset must not contain inherited-preset escape hatches")
     if preset.get("extends") != APPROVED_SHARED_EXTENDS:
         errors.append("shared preset extends must equal the closed built-in allowlist")
     if preset.get("platformAutomerge") is not False:
@@ -365,6 +369,16 @@ def validate_shared_preset(text: str) -> tuple[dict[str, Any] | None, list[str]]
         if isinstance(value, dict):
             for key, child in value.items():
                 child_path = f"{path}.{key}"
+                if key in {"ignorePresets", "globalExtends"}:
+                    errors.append(
+                        f"{child_path} must not be present; shared preset resolution "
+                        "is closed"
+                    )
+                if key == "extends" and path != "shared":
+                    errors.append(
+                        f"{child_path} must not be present; nested shared preset "
+                        "inheritance is forbidden"
+                    )
                 if key == "automerge" and child is True:
                     errors.append(f"{child_path} must not enable Renovate merging")
                 if key in FORBIDDEN_AUTOMERGE_KEYS:
@@ -399,7 +413,11 @@ def effective_config_proof(
             local_config_text.encode("utf-8")
         ).hexdigest(),
         "shared_extends_allowlist_exact": not shared_errors,
-        "local_extends_closed": not any("extends" in error for error in local_errors),
+        "local_extends_closed": not any(
+            control in error
+            for error in local_errors
+            for control in ("extends", "ignorePresets", "globalExtends", "preset resolution")
+        ),
         "local_candidate_label_forbidden": not any(
             ORG_CANDIDATE_LABEL in error for error in local_errors
         ),
