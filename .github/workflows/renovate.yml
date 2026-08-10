@@ -198,7 +198,7 @@ jobs:
           configurationFile: .github/renovate-config.js
           token: ${{ secrets.RENOVATE_TOKEN }}
           # renovate: datasource=docker depName=renovate/renovate
-          renovate-version: 43.263.3@sha256:dbdb501ad9a2558ab8f99538b1d4be0a8768cf8c3383aaa33a35ed981dfe3464
+          renovate-version: 44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81
           env-regex: "^(?:RENOVATE_\\w+|DOCKERHUB_\\w+|GHCR_\\w+|LOG_LEVEL)$"
         env:
           LOG_LEVEL: ${{ github.event.inputs.logLevel || 'info' }}
@@ -227,7 +227,7 @@ jobs:
           configurationFile: .github/renovate-config.js
           token: ${{ secrets.RENOVATE_TOKEN }}
           # renovate: datasource=docker depName=renovate/renovate
-          renovate-version: 43.263.3@sha256:dbdb501ad9a2558ab8f99538b1d4be0a8768cf8c3383aaa33a35ed981dfe3464
+          renovate-version: 44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81
           env-regex: "^(?:RENOVATE_\\w+|DOCKERHUB_\\w+|GHCR_\\w+|LOG_LEVEL)$"
         env:
           LOG_LEVEL: ${{ github.event.inputs.logLevel || 'info' }}
