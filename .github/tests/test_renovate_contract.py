@@ -819,6 +819,19 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertNotIn("automergeType", json.dumps(preset))
         self.assertNotIn("automergeStrategy", json.dumps(preset))
 
+    def test_vendored_dependency_trees_are_not_mutated(self):
+        preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
+        self.assertIn("vendor/**", preset["ignorePaths"])
+        self.assertIn("**/vendor/**", preset["ignorePaths"])
+        disabled_patterns = {
+            pattern
+            for rule in preset["packageRules"]
+            if rule.get("enabled") is False
+            for pattern in rule.get("matchFileNames", [])
+        }
+        self.assertIn("vendor/**", disabled_patterns)
+        self.assertIn("**/vendor/**", disabled_patterns)
+
     def test_automerge_refuses_partial_repository_visibility(self):
         workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
             encoding="utf-8"
