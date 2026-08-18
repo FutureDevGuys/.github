@@ -30,6 +30,13 @@ const exactPresetPattern = /^github>FutureDevGuys\/\.github:renovate-config#[0-9
 const artifactLockRendererSha256 = 'b8ef3705ee68b7cfd2c769a05c8faece65fd996fb2f81ee6edfc175a63cc4fc6';
 const dockerArtifactLockCommand = `python3 -I -c "import hashlib,os,pathlib,runpy,sys; p='scripts/artifact_lock.py'; e='${artifactLockRendererSha256}'; a=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest(); a==e or sys.exit(f'artifact_lock.py digest {a} != policy {e}'); os.environ.clear(); os.environ.update(HOME='/nonexistent',PATH='/usr/bin:/bin',LANG='C.UTF-8',LC_ALL='C.UTF-8'); sys.argv=[p,'render']; runpy.run_path(p,run_name='__main__')"`;
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const repositoriesWithDisabledCustomCi = [
+  'FutureDevGuys/docker-configs',
+  'FutureDevGuys/homelab-iac',
+  'FutureDevGuys/personal-containers',
+  'FutureDevGuys/shellrc.d',
+  'FutureDevGuys/system-config',
+];
 
 if (!exactPresetPattern.test(preset)) {
   throw new Error(
@@ -54,6 +61,12 @@ const config = {
   ],
   allowShellExecutorForPostUpgradeCommands: false,
   packageRules: [
+    {
+      description: 'Do not update GitHub Actions in repositories whose custom CI is intentionally disabled.',
+      matchRepositories: repositoriesWithDisabledCustomCi,
+      matchManagers: ['github-actions'],
+      enabled: false,
+    },
     {
       description: 'Regenerate the Docker owner artifact lock with a policy-pinned, credential-stripped renderer.',
       matchRepositories: ['FutureDevGuys/docker-configs'],

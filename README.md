@@ -88,3 +88,6 @@ repository's secrets. Renovate autodiscovers non-archived `FutureDevGuys`
 repositories, while `.github/automerge-policy.json` is the explicit automerge
 adoption list. Adding a repository therefore requires central policy only—not a
 caller workflow or duplicated credentials.
+GitHub Actions dependencies in target repositories are ignored while their
+custom CI remains intentionally disabled; the central `.github` repository
+continues to manage its own active Renovate and automerge action pins.
