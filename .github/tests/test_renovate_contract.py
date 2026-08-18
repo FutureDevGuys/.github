@@ -623,6 +623,39 @@ class InvalidCallerArtifactReplayTests(unittest.TestCase):
 
 
 class RenovatePolicyTests(unittest.TestCase):
+    def test_disabled_target_ci_actions_are_not_managed(self):
+        probe = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const c=require('./.github/renovate-config.js');"
+                "const r=c.packageRules.find(x=>x.matchManagers?.includes('github-actions') && x.enabled===false);"
+                "console.log(JSON.stringify(r));",
+            ],
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "RENOVATE_CONFIG_PRESET": (
+                    "github>FutureDevGuys/.github:renovate-config#" + "1" * 40
+                ),
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        rule = json.loads(probe.stdout)
+        self.assertEqual(rule["matchManagers"], ["github-actions"])
+        self.assertEqual(
+            rule["matchRepositories"],
+            [
+                "FutureDevGuys/docker-configs",
+                "FutureDevGuys/homelab-iac",
+                "FutureDevGuys/personal-containers",
+                "FutureDevGuys/shellrc.d",
+                "FutureDevGuys/system-config",
+            ],
+        )
+
     def test_docker_artifact_lock_regeneration_is_exactly_allowlisted(self):
         preset = json.loads(
             (REPO_ROOT / "renovate-config.json").read_text(encoding="utf-8")
@@ -632,7 +665,7 @@ class RenovatePolicyTests(unittest.TestCase):
                 "node",
                 "-e",
                 "const c=require('./.github/renovate-config.js');"
-                "const r=c.packageRules.find(x=>x.matchRepositories?.includes('FutureDevGuys/docker-configs'));"
+                "const r=c.packageRules.find(x=>x.matchRepositories?.includes('FutureDevGuys/docker-configs') && x.postUpgradeTasks);"
                 "const cmd=r.postUpgradeTasks.commands[0];"
                 "console.log(JSON.stringify({cmd,pattern:c.allowedCommands[0],matches:new RegExp(c.allowedCommands[0]).test(cmd),shell:c.allowShellExecutorForPostUpgradeCommands,files:r.postUpgradeTasks.fileFilters,mode:r.postUpgradeTasks.executionMode}));",
             ],

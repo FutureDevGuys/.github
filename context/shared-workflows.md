@@ -62,6 +62,10 @@ the central credentials and does not consume private-repository Actions minutes.
 Target repositories do not carry dependency-automation callers. Renovate uses
 org autodiscovery; adding an immutable repository entry to
 `.github/automerge-policy.json` opts it into the merge sweep.
+The runtime disables the `github-actions` manager for target repositories while
+their custom CI is intentionally disabled. This prevents inactive workflow
+files from creating dependency PR noise without weakening pin management for
+the two active workflows in this repository.
 
 The current Renovate token principal is an ordinary GitHub user, not a dedicated
 bot/App; `context/state.md` tracks that residual identity-separation risk.
