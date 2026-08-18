@@ -62,6 +62,12 @@ const config = {
   allowShellExecutorForPostUpgradeCommands: false,
   packageRules: [
     {
+      description: 'Require root Go and Cargo dependency updates to pass the root bundle contracts before merge.',
+      matchRepositories: ['FutureDevGuys/personal-containers'],
+      matchManagers: ['gomod', 'cargo'],
+      addLabels: ['manual-review'],
+    },
+    {
       description: 'Do not update GitHub Actions in repositories whose custom CI is intentionally disabled.',
       matchRepositories: repositoriesWithDisabledCustomCi,
       matchManagers: ['github-actions'],
