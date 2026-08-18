@@ -2,27 +2,6 @@ name: security-contract
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/automerge-policy.json"
-      - ".github/renovate-config.js"
-      - ".github/security-scan-adopters.json"
-      - ".github/scripts/**"
-      - ".github/tests/**"
-      - ".github/workflows/**"
-      - "renovate-config.json"
-  push:
-    branches: [main]
-    paths:
-      - ".github/automerge-policy.json"
-      - ".github/renovate-config.js"
-      - ".github/security-scan-adopters.json"
-      - ".github/scripts/**"
-      - ".github/tests/**"
-      - ".github/workflows/**"
-      - "renovate-config.json"
-  schedule:
-    - cron: "30 8 * * 0"
 
 permissions:
   contents: read
@@ -114,7 +93,6 @@ jobs:
           --workflow-revision "${{ github.sha }}"
 
   adoption-audit:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

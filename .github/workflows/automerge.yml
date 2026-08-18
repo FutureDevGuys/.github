@@ -1,9 +1,7 @@
 name: Automerge
 
 on:
-  schedule:
-    # 30 min after Renovate runs (Renovate: "0 */6 * * *")
-    - cron: "30 */6 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,6 +15,7 @@ env:
 
 jobs:
   sweep:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
