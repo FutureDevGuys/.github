@@ -740,8 +740,8 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertEqual(
             runtime_pins,
             [
-                "43.269.1@sha256:2d55099f3cd26c0e91fdf69b8a7d904adb7cf0f3039ad33b94b1856d3cf928b4",
-                "43.269.1@sha256:2d55099f3cd26c0e91fdf69b8a7d904adb7cf0f3039ad33b94b1856d3cf928b4",
+                "44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81",
+                "44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81",
             ],
         )
         self.assertEqual(
