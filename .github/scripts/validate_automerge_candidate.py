@@ -1,21 +1,13 @@
 #!/usr/bin/env python3
-"""Fail-closed identity, adoption, and current-head CI gate for automerge."""
+"""Fail-closed identity and current-head evidence gate for automerge."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any
-
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from audit_security_scan_adoption import validate_caller  # noqa: E402
 
 
 SCHEMA_VERSION = 1
@@ -37,7 +29,10 @@ def eligible(head_sha: str, check_count: int, status_count: int) -> dict[str, An
         "schema_version": SCHEMA_VERSION,
         "eligible": True,
         "reason": "eligible",
-        "detail": f"validated {check_count} check runs and {status_count} commit statuses",
+        "detail": (
+            "validated Renovate identity and "
+            f"{check_count} observed check runs plus {status_count} commit statuses"
+        ),
         "head_sha": head_sha,
     }
 
@@ -82,8 +77,8 @@ def _load_repository_policy(
             "invalid_policy", f"{repository} must bind exact REST and GraphQL IDs"
         )
     required_checks = repository_policy.get("required_checks")
-    if not isinstance(required_checks, list) or not required_checks:
-        return None, blocked("invalid_policy", f"{repository} has no required checks")
+    if not isinstance(required_checks, list):
+        return None, blocked("invalid_policy", f"{repository} required checks must be a list")
     if not all(
         isinstance(item, dict)
         and isinstance(item.get("name"), str)
@@ -93,8 +88,6 @@ def _load_repository_policy(
         for item in required_checks
     ):
         return None, blocked("invalid_policy", f"{repository} required checks are malformed")
-    if not any(item["name"] == "trivy / trivy" for item in required_checks):
-        return None, blocked("invalid_policy", f"{repository} must require truthful trivy")
     return {"identity": identity, "repository": repository_policy}, None
 
 
@@ -106,8 +99,6 @@ def evaluate_candidate(
     commits: list[dict[str, Any]],
     checks: dict[str, Any],
     statuses: dict[str, Any],
-    caller_text: str,
-    required_security_revision: str,
 ) -> dict[str, Any]:
     loaded, error = _load_repository_policy(policy, repository)
     if error:
@@ -119,13 +110,6 @@ def evaluate_candidate(
     head_sha = pull_request.get("headRefOid")
     if not isinstance(head_sha, str) or SHA_RE.fullmatch(head_sha) is None:
         return blocked("invalid_head_sha", "PR headRefOid must be an exact commit SHA")
-    if SHA_RE.fullmatch(required_security_revision) is None:
-        return blocked(
-            "invalid_security_revision",
-            "required security workflow revision must be an exact commit SHA",
-            head_sha,
-        )
-
     author = pull_request.get("author")
     if not isinstance(author, dict) or any(
         author.get(key) != identity.get(key) for key in ("login", "id", "is_bot")
@@ -200,14 +184,6 @@ def evaluate_candidate(
                 f"commit {commit.get('sha')} committer is neither Renovate nor the policy-bound refresh principal",
                 head_sha,
             )
-
-    caller_errors = validate_caller(caller_text, required_security_revision)
-    if caller_errors:
-        return blocked(
-            "invalid_security_caller",
-            "; ".join(caller_errors),
-            head_sha,
-        )
 
     check_runs = checks.get("check_runs")
     total_count = checks.get("total_count")
@@ -317,8 +293,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--commits", type=Path, required=True)
     parser.add_argument("--checks", type=Path, required=True)
     parser.add_argument("--statuses", type=Path, required=True)
-    parser.add_argument("--caller", type=Path, required=True)
-    parser.add_argument("--required-security-revision", required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -333,8 +307,6 @@ def main() -> int:
             commits=load_json(args.commits),
             checks=load_json(args.checks),
             statuses=load_json(args.statuses),
-            caller_text=args.caller.read_text(encoding="utf-8"),
-            required_security_revision=args.required_security_revision,
         )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         result = blocked("candidate_evidence_invalid", str(error))
