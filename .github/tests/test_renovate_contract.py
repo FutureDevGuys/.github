@@ -655,7 +655,7 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertIn("python3 -I -c", contract["cmd"])
         self.assertIn("os.environ.clear()", contract["cmd"])
         self.assertIn(
-            "96265e8d6e741353dfa0651a16d13f4d552ba1e1516d8d1ec637420342aedf2e",
+            "b8ef3705ee68b7cfd2c769a05c8faece65fd996fb2f81ee6edfc175a63cc4fc6",
             contract["cmd"],
         )
         self.assertNotIn("RENOVATE_TOKEN", contract["cmd"])
