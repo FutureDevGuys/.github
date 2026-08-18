@@ -1,0 +1,87 @@
+{
+  "authority": "generated-test-evidence",
+  "expectation": {
+    "invalid_before": 27,
+    "repair_scope": "org-required-revision-component-only",
+    "still_invalid_after_org_revision_fix": 27,
+    "valid_after_org_revision_fix": 0
+  },
+  "groups": [
+    {
+      "candidate_ids": [
+        "FutureDevGuys-docker-configs-531",
+        "FutureDevGuys-docker-configs-538",
+        "FutureDevGuys-docker-configs-594",
+        "FutureDevGuys-docker-configs-630",
+        "FutureDevGuys-docker-configs-639",
+        "FutureDevGuys-docker-configs-643",
+        "FutureDevGuys-docker-configs-644",
+        "FutureDevGuys-docker-configs-645",
+        "FutureDevGuys-docker-configs-646",
+        "FutureDevGuys-docker-configs-647",
+        "FutureDevGuys-docker-configs-648",
+        "FutureDevGuys-docker-configs-651",
+        "FutureDevGuys-system-config-19",
+        "FutureDevGuys-system-config-20",
+        "FutureDevGuys-system-config-21",
+        "FutureDevGuys-system-config-23",
+        "FutureDevGuys-system-config-24",
+        "FutureDevGuys-system-config-25",
+        "FutureDevGuys-system-config-26"
+      ],
+      "expected_errors": [
+        "workflow_revision must equal the SHA in jobs.trivy.uses"
+      ],
+      "fixture": ".github/tests/fixtures/automerge-caller-replay/current-split-pin.yml",
+      "sha256": "46f712940b2417ce36acfb8dd00d27c8a5510460a66d5e40f1b165a524602dad"
+    },
+    {
+      "candidate_ids": [
+        "FutureDevGuys-homelab-iac-110",
+        "FutureDevGuys-homelab-iac-166"
+      ],
+      "expected_errors": [
+        "caller must pass workflow_revision as one exact 40-character SHA",
+        "jobs.trivy.with must contain only workflow_revision",
+        "caller revision 67fe1a5e237bc1ce75d22d1179f0f539f18f0e54 does not match required org revision 032d7dc24158b3c7fe52c393028b71d5c030ffdd",
+        "caller is missing the push trigger",
+        "caller must constrain its push trigger to main",
+        "caller must not skip dependency-bot pull requests"
+      ],
+      "fixture": ".github/tests/fixtures/automerge-caller-replay/legacy-homelab-iac.yml",
+      "sha256": "5ad1cd5089c7a74073c0eea04b9e51c70d375894db8e9696f876f50f4084c94d"
+    },
+    {
+      "candidate_ids": [
+        "FutureDevGuys-personal-containers-427",
+        "FutureDevGuys-personal-containers-436",
+        "FutureDevGuys-personal-containers-491",
+        "FutureDevGuys-personal-containers-499",
+        "FutureDevGuys-personal-containers-564",
+        "FutureDevGuys-personal-containers-565"
+      ],
+      "expected_errors": [
+        "caller must pass workflow_revision as one exact 40-character SHA",
+        "jobs.trivy.with must contain only workflow_revision",
+        "caller revision 9382116ad4576c96300033428251001a8f6cc6de does not match required org revision 032d7dc24158b3c7fe52c393028b71d5c030ffdd",
+        "caller is missing the push trigger",
+        "caller is missing the schedule trigger",
+        "caller must constrain its push trigger to main",
+        "caller schedule trigger must declare a quoted cron expression",
+        "caller must not skip dependency-bot pull requests"
+      ],
+      "fixture": ".github/tests/fixtures/automerge-caller-replay/legacy-personal-containers.yml",
+      "sha256": "7fa60cd53cf3724e46abb450110b5f0e014c5f5dfcc22e4577d8750a6ee1576f"
+    }
+  ],
+  "proposed_required_revision": "032d7dc24158b3c7fe52c393028b71d5c030ffdd",
+  "schema_version": 1,
+  "source": {
+    "artifact_name": "automerge-outcomes",
+    "automerge_outcomes_sha256": "5f91bd87db106c016e57682249ead254d5d6db069c10867cf43e3a04ce66692d",
+    "automerge_summary_sha256": "fc2f518b5e1d33b0e3c0e5f3026029f71cd530e1ee53cf089179719c791ded31",
+    "repository": "FutureDevGuys/.github",
+    "run_head_revision": "759cc2c9c28a1e08f0503ff8692a3531207409c0",
+    "run_id": 29445674961
+  }
+}

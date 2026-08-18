@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import re
@@ -10,7 +11,6 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,6 +27,10 @@ def load_module(name: str, relative_path: str):
 
 
 outcomes = load_module("automerge_outcomes", ".github/scripts/automerge_outcomes.py")
+adoption = load_module(
+    "audit_security_scan_adoption",
+    ".github/scripts/audit_security_scan_adoption.py",
+)
 candidate = load_module(
     "validate_automerge_candidate",
     ".github/scripts/validate_automerge_candidate.py",
@@ -47,6 +51,593 @@ repository_visibility = load_module(
     "validate_automerge_repository_visibility",
     ".github/scripts/validate_automerge_repository_visibility.py",
 )
+security_revision = load_module(
+    "resolve_security_contract_revision",
+    ".github/scripts/resolve_security_contract_revision.py",
+)
+security_release = load_module(
+    "manage_security_contract_release",
+    ".github/scripts/manage_security_contract_release.py",
+)
+
+
+class SecurityContractRevisionTests(unittest.TestCase):
+    def git(self, root: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def manifest(self) -> dict:
+        return json.loads(
+            (REPO_ROOT / security_revision.DEPENDENCY_MANIFEST_PATH).read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def write_contract(self, root: Path) -> None:
+        manifest = self.manifest()
+        manifest_target = root / security_revision.DEPENDENCY_MANIFEST_PATH
+        manifest_target.parent.mkdir(parents=True, exist_ok=True)
+        manifest_target.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        python_paths = [
+            row["path"] for row in manifest["dependencies"] if row["kind"] == "python"
+        ]
+        for row in manifest["dependencies"]:
+            target = root / row["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if row["kind"] == "workflow":
+                commands = "\n".join(
+                    f"          python3 .security-contract/{path}"
+                    for path in python_paths
+                )
+                target.write_text(
+                    "name: fixture\n"
+                    "jobs:\n"
+                    "  scan:\n"
+                    "    steps:\n"
+                    "      - run: |\n"
+                    f"{commands}\n",
+                    encoding="utf-8",
+                )
+            else:
+                target.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "from __future__ import annotations\n"
+                    "\n"
+                    "VALUE = 'closed fixture dependency'\n",
+                    encoding="utf-8",
+                )
+            target.chmod(0o755 if row["git_mode"] == "100755" else 0o644)
+
+    def make_repository(self, root: Path) -> str:
+        subprocess.run(
+            ["git", "init", "-b", "main", str(root)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Contract Test"],
+            cwd=root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "contract@example.invalid"],
+            cwd=root,
+            check=True,
+        )
+        self.write_contract(root)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "security contract"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return self.git(root, "rev-parse", "HEAD")
+
+    def commit(self, root: Path, path: str, content: str, message: str) -> str:
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "add", path], cwd=root, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return self.git(root, "rev-parse", "HEAD")
+
+    def test_unrelated_repository_commit_does_not_invalidate_callers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            initial = self.make_repository(root)
+            head = self.commit(root, "README.md", "unrelated\n", "unrelated policy")
+            receipt = security_revision.resolve_revision(root)
+            self.assertEqual(receipt["security_contract_revision"], initial)
+            self.assertEqual(receipt["head_revision"], head)
+            self.assertNotEqual(initial, head)
+            self.assertEqual(
+                [row["path"] for row in receipt["protected_files"]],
+                [row["path"] for row in self.manifest()["dependencies"]],
+            )
+            self.assertEqual(receipt["schema_version"], 2)
+            self.assertEqual(
+                receipt["dependency_manifest"]["path"],
+                security_revision.DEPENDENCY_MANIFEST_PATH,
+            )
+
+    def test_protected_contract_change_advances_required_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            self.make_repository(root)
+            changed = self.commit(
+                root,
+                ".github/workflows/security-scan.yml",
+                (root / ".github/workflows/security-scan.yml").read_text(
+                    encoding="utf-8"
+                )
+                + "# changed reusable workflow\n",
+                "change security contract",
+            )
+            self.assertEqual(
+                security_revision.resolve_revision(root)["security_contract_revision"],
+                changed,
+            )
+
+    def test_shallow_checkout_is_rejected_instead_of_misidentifying_head(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            self.make_repository(source)
+            self.commit(source, "README.md", "unrelated\n", "unrelated policy")
+            clone = Path(temporary) / "shallow"
+            subprocess.run(
+                ["git", "clone", "--depth", "1", f"file://{source}", str(clone)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "full Git history is required",
+            ):
+                security_revision.resolve_revision(clone)
+
+    def test_deleted_protected_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            self.make_repository(root)
+            target = root / ".github/scripts/build_scan_result.py"
+            target.unlink()
+            subprocess.run(
+                ["git", "add", ".github/scripts/build_scan_result.py"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "delete protected file"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with self.assertRaises(security_revision.RevisionError):
+                security_revision.resolve_revision(root)
+
+    def test_manifest_reformat_does_not_advance_runtime_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            initial = self.make_repository(root)
+            target = root / security_revision.DEPENDENCY_MANIFEST_PATH
+            target.write_text(
+                json.dumps(self.manifest(), separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            head = self.commit(
+                root,
+                security_revision.DEPENDENCY_MANIFEST_PATH,
+                target.read_text(encoding="utf-8"),
+                "reformat dependency authority",
+            )
+            receipt = security_revision.resolve_revision(root)
+            self.assertEqual(receipt["security_contract_revision"], initial)
+            self.assertEqual(receipt["head_revision"], head)
+
+    def test_symlinked_protected_dependency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            self.make_repository(root)
+            path = ".github/scripts/build_scan_result.py"
+            target = root / path
+            target.unlink()
+            (root / ".github/scripts/untracked.py").write_text(
+                "VALUE = 'untracked'\n", encoding="utf-8"
+            )
+            target.symlink_to("untracked.py")
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "replace protected dependency with symlink"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "Git mode differs from manifest",
+            ):
+                security_revision.resolve_revision(root)
+
+    def test_gitlink_protected_dependency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            initial = self.make_repository(root)
+            path = ".github/scripts/build_scan_result.py"
+            subprocess.run(
+                [
+                    "git",
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    "160000",
+                    initial,
+                    path,
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "replace protected dependency with gitlink"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with self.assertRaises(security_revision.RevisionError):
+                security_revision.resolve_revision(root)
+
+    def test_dynamic_import_in_protected_dependency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            self.make_repository(root)
+            self.commit(
+                root,
+                ".github/scripts/build_scan_result.py",
+                "import importlib\nimportlib.import_module('helper')\n",
+                "add dynamic local edge",
+            )
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "non-closed runtime edge",
+            ):
+                security_revision.resolve_revision(root)
+
+    def test_static_untracked_local_import_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            self.make_repository(root)
+            (root / ".github/scripts/helper.py").write_text(
+                "VALUE = 'helper'\n", encoding="utf-8"
+            )
+            (root / ".github/scripts/build_scan_result.py").write_text(
+                "import helper\n", encoding="utf-8"
+            )
+            subprocess.run(["git", "add", ".github/scripts"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "add untracked local import"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "untracked or ambiguous local module",
+            ):
+                security_revision.resolve_revision(root)
+
+    def test_workflow_untracked_local_dependency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            self.make_repository(root)
+            helper = root / ".github/scripts/helper.py"
+            helper.write_text("VALUE = 'helper'\n", encoding="utf-8")
+            workflow = root / ".github/workflows/security-scan.yml"
+            workflow.write_text(
+                workflow.read_text(encoding="utf-8")
+                + "          python3 .security-contract/.github/scripts/helper.py\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", ".github"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "add untracked workflow dependency"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "untracked local dependencies",
+            ):
+                security_revision.resolve_revision(root)
+
+    def test_final_freshness_rejects_default_branch_advance_and_bundle_change(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            head = self.make_repository(root)
+            initial = security_revision.resolve_revision(root)
+            security_revision.validate_freshness(initial, initial, head)
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "default branch advanced",
+            ):
+                security_revision.validate_freshness(initial, initial, "f" * 40)
+            changed = deepcopy(initial)
+            changed["authority_bundle_digest"] = "e" * 64
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "bundle changed",
+            ):
+                security_revision.validate_freshness(initial, changed, head)
+
+    def test_release_ref_must_equal_latest_protected_path_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            initial = self.make_repository(root)
+            receipt = security_revision.resolve_revision(root)
+            security_revision.validate_release_ref(receipt, initial)
+            changed = self.commit(
+                root,
+                ".github/workflows/security-scan.yml",
+                (root / ".github/workflows/security-scan.yml").read_text(
+                    encoding="utf-8"
+                )
+                + "# protected change\n",
+                "advance protected contract",
+            )
+            receipt = security_revision.resolve_revision(root)
+            self.assertEqual(receipt["security_contract_revision"], changed)
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "does not target the latest protected-path revision",
+            ):
+                security_revision.validate_release_ref(receipt, initial)
+            with self.assertRaisesRegex(
+                security_revision.RevisionError,
+                "does not target the latest protected-path revision",
+            ):
+                security_revision.validate_release_ref(receipt, "f" * 40)
+
+    def test_release_plan_is_noop_for_unrelated_commit_and_updates_protected_change(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            initial = self.make_repository(root)
+            self.git(root, "branch", "security-contract-v1", initial)
+            self.commit(root, "README.md", "unrelated\n", "unrelated policy")
+            unrelated_receipt = security_revision.resolve_revision(root)
+            noop = security_release.plan_release(
+                root,
+                unrelated_receipt,
+                initial,
+                bootstrap=False,
+            )
+            self.assertEqual(noop["action"], "noop")
+            self.assertEqual(noop["desired_target"], initial)
+            self.assertEqual(
+                self.git(root, "rev-parse", "security-contract-v1"),
+                initial,
+            )
+
+            changed = self.commit(
+                root,
+                ".github/workflows/security-scan.yml",
+                (root / ".github/workflows/security-scan.yml").read_text(
+                    encoding="utf-8"
+                )
+                + "# protected change\n",
+                "advance protected contract",
+            )
+            changed_receipt = security_revision.resolve_revision(root)
+            update = security_release.plan_release(
+                root,
+                changed_receipt,
+                initial,
+                bootstrap=False,
+            )
+            self.assertEqual(update["action"], "update")
+            self.assertEqual(update["desired_target"], changed)
+
+    def test_release_plan_requires_explicit_bootstrap_and_rejects_divergence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authority"
+            desired = self.make_repository(root)
+            receipt = security_revision.resolve_revision(root)
+            missing = security_release.plan_release(
+                root,
+                receipt,
+                None,
+                bootstrap=False,
+            )
+            self.assertEqual(missing["action"], "held")
+            self.assertEqual(
+                missing["reason"], "release_ref_missing_bootstrap_required"
+            )
+            create = security_release.plan_release(
+                root,
+                receipt,
+                None,
+                bootstrap=True,
+            )
+            self.assertEqual(create["action"], "create")
+
+            self.git(root, "checkout", "--orphan", "forged")
+            subprocess.run(["git", "rm", "-rf", "."], cwd=root, check=True)
+            forged = self.commit(root, "forged.txt", "forged\n", "forged ref")
+            self.git(root, "checkout", "main")
+            divergent = security_release.plan_release(
+                root,
+                receipt,
+                forged,
+                bootstrap=False,
+            )
+            self.assertEqual(divergent["action"], "held")
+            self.assertEqual(
+                divergent["reason"],
+                "release_ref_not_ancestor_of_desired_target",
+            )
+            self.assertNotEqual(forged, desired)
+
+    def test_workflow_resolves_contract_revision_from_full_history(self):
+        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertEqual(workflow.count("resolve_security_contract_revision.py"), 2)
+        self.assertIn("--initial-receipt", workflow)
+        self.assertIn("--current-default-head", workflow)
+        self.assertEqual(workflow.count("--release-ref-target"), 2)
+        self.assertEqual(
+            workflow.count("git/ref/${SECURITY_CONTRACT_RELEASE_REF#refs/}"), 2
+        )
+        self.assertIn("repos/${ORG}/.github/commits/${TARGET_BRANCH}", workflow)
+        self.assertIn("org_security_authority_advanced", workflow)
+        self.assertEqual(
+            workflow.count(
+                '--required-security-revision "${security_contract_revision}"'
+            ),
+            2,
+        )
+        self.assertNotIn('org_revision="$(git rev-parse HEAD)"', workflow)
+
+    def test_release_workflow_tracks_exact_manifest_surface_and_never_force_updates(
+        self,
+    ):
+        manifest = self.manifest()
+        workflow = (
+            REPO_ROOT / ".github/workflows/security-contract-release.yml"
+        ).read_text(encoding="utf-8")
+        push_block = workflow.split("  push:\n", 1)[1].split("\npermissions:\n", 1)[0]
+        triggered_paths = {
+            match.group(1)
+            for match in re.finditer(r'^      - "([^"]+)"$', push_block, re.MULTILINE)
+        }
+        expected_paths = {
+            security_revision.DEPENDENCY_MANIFEST_PATH,
+            *(row["path"] for row in manifest["dependencies"]),
+        }
+        self.assertEqual(triggered_paths, expected_paths)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("bootstrap_release_ref:", workflow)
+        self.assertIn("--field force=false", workflow)
+        self.assertNotIn("--field force=true", workflow)
+        self.assertIn("git rev-parse origin/main", workflow)
+        adoption_workflow = (
+            REPO_ROOT / ".github/workflows/security-contract.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("--release-ref-target", adoption_workflow)
+        self.assertIn(
+            "--required-revision ${{ steps.security_authority.outputs.revision }}",
+            adoption_workflow,
+        )
+        self.assertNotIn("--required-revision ${{ github.sha }}", adoption_workflow)
+
+    def test_protected_paths_cover_every_runtime_scan_contract_script(self):
+        manifest = self.manifest()
+        workflow = (REPO_ROOT / ".github/workflows/security-scan.yml").read_text(
+            encoding="utf-8"
+        )
+        referenced = {
+            match.group(1)
+            for match in re.finditer(
+                r"\.security-contract/(\.github/scripts/[A-Za-z0-9_.-]+\.py)",
+                workflow,
+            )
+        }
+        protected_scripts = {
+            row["path"] for row in manifest["dependencies"] if row["kind"] == "python"
+        }
+        self.assertEqual(referenced, protected_scripts)
+
+        local_module_names = {
+            path.stem for path in (REPO_ROOT / ".github/scripts").glob("*.py")
+        }
+        for relative in sorted(protected_scripts):
+            source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+            local_imports = {
+                match.group(1).split(".", 1)[0]
+                for match in re.finditer(
+                    r"^(?:from|import)\s+([A-Za-z_][A-Za-z0-9_.]*)",
+                    source,
+                    flags=re.MULTILINE,
+                )
+            } & local_module_names
+            self.assertEqual(
+                local_imports,
+                set(),
+                f"{relative} has an unprotected repository-local import",
+            )
+
+
+class InvalidCallerArtifactReplayTests(unittest.TestCase):
+    def test_org_revision_fix_does_not_claim_caller_repair(self):
+        evidence_path = (
+            REPO_ROOT / ".github/tests/fixtures/automerge-invalid-caller-replay-v1.json"
+        )
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        self.assertEqual(evidence["schema_version"], 1)
+        self.assertEqual(evidence["authority"], "generated-test-evidence")
+        self.assertEqual(
+            evidence["source"],
+            {
+                "artifact_name": "automerge-outcomes",
+                "automerge_outcomes_sha256": "5f91bd87db106c016e57682249ead254d5d6db069c10867cf43e3a04ce66692d",
+                "automerge_summary_sha256": "fc2f518b5e1d33b0e3c0e5f3026029f71cd530e1ee53cf089179719c791ded31",
+                "repository": "FutureDevGuys/.github",
+                "run_head_revision": "759cc2c9c28a1e08f0503ff8692a3531207409c0",
+                "run_id": 29445674961,
+            },
+        )
+        required_revision = evidence["proposed_required_revision"]
+        candidate_ids: list[str] = []
+        valid_count = 0
+        for group in evidence["groups"]:
+            fixture = REPO_ROOT / group["fixture"]
+            raw = fixture.read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), group["sha256"])
+            errors = adoption.validate_caller(raw.decode("utf-8"), required_revision)
+            self.assertEqual(errors, group["expected_errors"])
+            candidate_ids.extend(group["candidate_ids"])
+            if not errors:
+                valid_count += len(group["candidate_ids"])
+        self.assertEqual(len(candidate_ids), len(set(candidate_ids)))
+        self.assertEqual(len(candidate_ids), evidence["expectation"]["invalid_before"])
+        self.assertEqual(
+            valid_count,
+            evidence["expectation"]["valid_after_org_revision_fix"],
+        )
+        self.assertEqual(
+            len(candidate_ids) - valid_count,
+            evidence["expectation"]["still_invalid_after_org_revision_fix"],
+        )
+        self.assertEqual(
+            evidence["expectation"]["repair_scope"],
+            "org-required-revision-component-only",
+        )
 
 
 class RenovatePolicyTests(unittest.TestCase):
@@ -122,7 +713,9 @@ class RenovatePolicyTests(unittest.TestCase):
             "github>FutureDevGuys/.github:renovate-config#${{ github.sha }}",
             workflow,
         )
-        self.assertIn("repos/FutureDevGuys/.github/contents/renovate-config.json", workflow)
+        self.assertIn(
+            "repos/FutureDevGuys/.github/contents/renovate-config.json", workflow
+        )
 
     def test_runtime_config_rejects_mutable_shared_preset(self):
         command = [
@@ -203,7 +796,10 @@ class RenovatePolicyTests(unittest.TestCase):
             if manager.get("depNameTemplate") == "FutureDevGuys/.github"
         )
         self.assertEqual(manager["datasourceTemplate"], "github-digest")
-        self.assertEqual(manager["currentValueTemplate"], "main")
+        self.assertEqual(
+            manager["currentValueTemplate"],
+            "security-contract-v1",
+        )
         self.assertEqual(manager["packageNameTemplate"], "FutureDevGuys/.github")
         pattern = manager["matchStrings"][0].replace(
             "(?<currentDigest>",
@@ -328,9 +924,7 @@ class AutomergeRepositoryVisibilityTests(unittest.TestCase):
     def test_all_adopted_repositories_are_visible_with_exact_ids(self):
         result = self.evaluate()
         self.assertTrue(result["eligible"])
-        self.assertEqual(
-            result["repositories"], sorted(self.policy["repositories"])
-        )
+        self.assertEqual(result["repositories"], sorted(self.policy["repositories"]))
 
     def test_missing_private_adopted_repository_fails_closed(self):
         omitted = self.discovered[0]["full_name"]
@@ -761,9 +1355,9 @@ class AutomergeRefreshTests(unittest.TestCase):
             {"filename": "compose/example.yml"},
         ]
         self.assertEqual(
-            self.evaluate(
-                pull_request=pull_request, changed_files=changed_files
-            )["reason"],
+            self.evaluate(pull_request=pull_request, changed_files=changed_files)[
+                "reason"
+            ],
             "changed_file_evidence_ambiguous",
         )
 
@@ -838,10 +1432,14 @@ class AutomergeRefreshTests(unittest.TestCase):
                 premerge_start,
                 merge_start,
             ),
-            workflow.rindex("validate_automerge_candidate.py", premerge_start, merge_start),
+            workflow.rindex(
+                "validate_automerge_candidate.py", premerge_start, merge_start
+            ),
         )
         self.assertLess(
-            workflow.rindex("validate_automerge_candidate.py", premerge_start, merge_start),
+            workflow.rindex(
+                "validate_automerge_candidate.py", premerge_start, merge_start
+            ),
             merge_start,
         )
 
@@ -916,7 +1514,7 @@ class AutomergeRefreshPostconditionTests(unittest.TestCase):
         workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
             encoding="utf-8"
         )
-        request_start = workflow.index('if gh api --method PUT \\\n')
+        request_start = workflow.index("if gh api --method PUT \\\n")
         request_end = workflow.index("# Only a current branch reaches merge validation")
         request_block = workflow[request_start:request_end]
         self.assertIn("validate_automerge_refresh_postcondition.py", request_block)

@@ -1,0 +1,24 @@
+{
+  "authority": "canonical",
+  "dependencies": [
+    {
+      "git_mode": "100644",
+      "kind": "python",
+      "path": ".github/scripts/build_scan_result.py"
+    },
+    {
+      "git_mode": "100644",
+      "kind": "python",
+      "path": ".github/scripts/validate_scan_result.py"
+    },
+    {
+      "git_mode": "100644",
+      "kind": "workflow",
+      "path": ".github/workflows/security-scan.yml"
+    }
+  ],
+  "entrypoint": ".github/workflows/security-scan.yml",
+  "owner": "FutureDevGuys/.github/security-scan",
+  "release_ref": "refs/heads/security-contract-v1",
+  "schema_version": 1
+}

@@ -1,0 +1,17 @@
+name: security-scan
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    uses: FutureDevGuys/.github/.github/workflows/security-scan.yml@9382116ad4576c96300033428251001a8f6cc6de
+    with:
+      is_dependency_bot_pr: ${{ github.event_name == 'pull_request' && (github.actor == 'renovate[bot]' || github.actor == 'dependabot[bot]' || startsWith(github.head_ref, 'renovate/') || startsWith(github.head_ref, 'dependabot/')) }}
+    permissions:
+      contents: read
