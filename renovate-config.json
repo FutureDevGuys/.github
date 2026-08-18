@@ -13,7 +13,12 @@
   "platformAutomerge": false,
   "rebaseWhen": "behind-base-branch",
   "dependencyDashboard": true,
-  "ignorePaths": ["archived/**", "**/archived/**"],
+  "ignorePaths": [
+    "archived/**",
+    "**/archived/**",
+    "vendor/**",
+    "**/vendor/**"
+  ],
   "prConcurrentLimit": 12,
   "prHourlyLimit": 6,
   "customManagers": [
@@ -49,7 +54,12 @@
   ],
   "packageRules": [
     {
-      "matchFileNames": ["archived/**", "**/archived/**"],
+      "matchFileNames": [
+        "archived/**",
+        "**/archived/**",
+        "vendor/**",
+        "**/vendor/**"
+      ],
       "enabled": false
     },
     {
