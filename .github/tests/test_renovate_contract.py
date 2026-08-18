@@ -623,6 +623,30 @@ class InvalidCallerArtifactReplayTests(unittest.TestCase):
 
 
 class RenovatePolicyTests(unittest.TestCase):
+    def test_root_go_and_cargo_updates_require_manual_review(self):
+        probe = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const c=require('./.github/renovate-config.js');"
+                "const r=c.packageRules.find(x=>x.matchRepositories?.includes('FutureDevGuys/personal-containers') && x.matchManagers?.includes('gomod'));"
+                "console.log(JSON.stringify(r));",
+            ],
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "RENOVATE_CONFIG_PRESET": (
+                    "github>FutureDevGuys/.github:renovate-config#" + "1" * 40
+                ),
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        rule = json.loads(probe.stdout)
+        self.assertEqual(rule["matchManagers"], ["gomod", "cargo"])
+        self.assertEqual(rule["addLabels"], ["manual-review"])
+
     def test_disabled_target_ci_actions_are_not_managed(self):
         probe = subprocess.run(
             [

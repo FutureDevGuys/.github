@@ -91,3 +91,6 @@ caller workflow or duplicated credentials.
 GitHub Actions dependencies in target repositories are ignored while their
 custom CI remains intentionally disabled; the central `.github` repository
 continues to manage its own active Renovate and automerge action pins.
+Root Go and Cargo updates receive `manual-review` because they participate in
+cross-language frozen-source and release contracts that Renovate cannot
+regenerate safely.
