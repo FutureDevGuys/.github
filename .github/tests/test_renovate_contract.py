@@ -502,27 +502,17 @@ class SecurityContractRevisionTests(unittest.TestCase):
             )
             self.assertNotEqual(forged, desired)
 
-    def test_workflow_resolves_contract_revision_from_full_history(self):
+    def test_automerge_binds_and_revalidates_the_checked_out_authority(self):
         workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("fetch-depth: 0", workflow)
-        self.assertEqual(workflow.count("resolve_security_contract_revision.py"), 2)
-        self.assertIn("--initial-receipt", workflow)
-        self.assertIn("--current-default-head", workflow)
-        self.assertEqual(workflow.count("--release-ref-target"), 2)
-        self.assertEqual(
-            workflow.count("git/ref/${SECURITY_CONTRACT_RELEASE_REF#refs/}"), 2
-        )
+        self.assertIn("EXPECTED_AUTHORITY_SHA: ${{ github.sha }}", workflow)
+        self.assertIn('checkout_head="$(git rev-parse HEAD)"', workflow)
         self.assertIn("repos/${ORG}/.github/commits/${TARGET_BRANCH}", workflow)
-        self.assertIn("org_security_authority_advanced", workflow)
-        self.assertEqual(
-            workflow.count(
-                '--required-security-revision "${security_contract_revision}"'
-            ),
-            2,
-        )
-        self.assertNotIn('org_revision="$(git rev-parse HEAD)"', workflow)
+        self.assertIn("org_automerge_authority_advanced", workflow)
+        self.assertNotIn("resolve_security_contract_revision.py", workflow)
+        self.assertNotIn("required-security-revision", workflow)
 
     def test_release_workflow_is_manual_only_and_never_force_updates(
         self,
@@ -780,36 +770,15 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertIsNone(digest_rule["minimumReleaseAge"])
         self.assertEqual(digest_rule["internalChecksFilter"], "strict")
 
-    def test_security_workflow_revision_updates_atomically(self):
+    def test_disabled_security_callers_are_not_managed_by_renovate(self):
         preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
-        manager = next(
-            manager
-            for manager in preset["customManagers"]
-            if manager.get("depNameTemplate") == "FutureDevGuys/.github"
+        self.assertFalse(
+            any(
+                manager.get("depNameTemplate") == "FutureDevGuys/.github"
+                or "security-scan" in json.dumps(manager)
+                for manager in preset["customManagers"]
+            )
         )
-        self.assertEqual(manager["datasourceTemplate"], "github-digest")
-        self.assertEqual(
-            manager["currentValueTemplate"],
-            "security-contract-v1",
-        )
-        self.assertEqual(manager["packageNameTemplate"], "FutureDevGuys/.github")
-        pattern = manager["matchStrings"][0].replace(
-            "(?<currentDigest>",
-            "(?P<currentDigest>",
-        )
-        fixture = (
-            REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
-        ).read_text(encoding="utf-8")
-        match = re.search(pattern, fixture)
-        self.assertIsNotNone(match)
-        self.assertEqual(match.group("currentDigest"), "1" * 40)
-        replacement = manager["autoReplaceStringTemplate"].replace(
-            "{{{newDigest}}}",
-            "2" * 40,
-        )
-        updated = re.sub(pattern, replacement, fixture, count=1)
-        self.assertEqual(updated.count("2" * 40), 2)
-        self.assertNotIn("1" * 40, updated)
 
     def test_renovate_only_labels_and_never_merges(self):
         preset = json.loads((REPO_ROOT / "renovate-config.json").read_text())
@@ -850,20 +819,27 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertIn("--paginate --slurp", workflow)
         self.assertNotIn("gh pr list", workflow)
 
-    def test_mutating_automerge_is_manual_and_default_branch_only(self):
+    def test_mutating_automerge_is_scheduled_manual_and_default_branch_only(self):
         workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertNotIn("\n  schedule:", workflow)
+        self.assertIn('\n  schedule:\n    - cron: "37 5,17 * * *"', workflow)
         self.assertNotIn("\n  push:", workflow)
         self.assertNotIn("\n  pull_request:", workflow)
         self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
         self.assertNotIn("DRY_RUN", workflow)
 
-    def test_org_mutating_and_audit_workflows_have_no_automatic_triggers(self):
+    def test_only_dependency_automation_has_automatic_triggers(self):
+        renovate = (
+            REPO_ROOT / ".github/workflows/renovate.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", renovate)
+        self.assertIn('\n  schedule:\n    - cron: "17 3 * * *"', renovate)
+        self.assertNotIn("\n  push:", renovate)
+        self.assertNotIn("\n  pull_request:", renovate)
+        self.assertIn("if: github.ref == 'refs/heads/main'", renovate)
         for relative in (
-            ".github/workflows/renovate.yml",
             ".github/workflows/security-contract.yml",
             ".github/workflows/security-contract-release.yml",
         ):
@@ -872,46 +848,27 @@ class RenovatePolicyTests(unittest.TestCase):
             self.assertNotIn("\n  schedule:", workflow, relative)
             self.assertNotIn("\n  push:", workflow, relative)
             self.assertNotIn("\n  pull_request:", workflow, relative)
-        renovate = (
-            REPO_ROOT / ".github/workflows/renovate.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("if: github.ref == 'refs/heads/main'", renovate)
 
-    def test_automerge_policy_matches_truthful_security_adopters(self):
+    def test_automerge_policy_adopts_all_managed_repositories_without_ci(self):
         policy = json.loads(
             (REPO_ROOT / ".github/automerge-policy.json").read_text(encoding="utf-8")
         )
-        adopters = json.loads(
-            (REPO_ROOT / ".github/security-scan-adopters.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(set(policy["repositories"]), set(adopters["repositories"]))
         self.assertEqual(
-            set(adopters["renovate_config_repositories"]),
+            set(policy["repositories"]),
             {
+                "FutureDevGuys/.github",
                 "FutureDevGuys/docker-configs",
                 "FutureDevGuys/homelab-iac",
                 "FutureDevGuys/personal-containers",
+                "FutureDevGuys/shellrc.d",
+                "FutureDevGuys/system-config",
             },
-        )
-        self.assertLessEqual(
-            set(adopters["renovate_config_repositories"]),
-            set(adopters["repositories"]),
         )
         for repository in policy["repositories"].values():
             self.assertIsInstance(repository["repository_id"], int)
             self.assertGreater(repository["repository_id"], 0)
             self.assertRegex(repository["head_repository_id"], r"^R_")
-            names = {check["name"] for check in repository["required_checks"]}
-            self.assertIn("trivy / trivy", names)
-        docker_names = {
-            check["name"]
-            for check in policy["repositories"]["FutureDevGuys/docker-configs"][
-                "required_checks"
-            ]
-        }
-        self.assertIn("contract-and-history", docker_names)
+            self.assertEqual(repository["required_checks"], [])
 
 
 class AutomergeRepositoryVisibilityTests(unittest.TestCase):
@@ -1014,7 +971,6 @@ class AutomergeRepositoryVisibilityTests(unittest.TestCase):
 
 class AutomergeCandidateTests(unittest.TestCase):
     repository = "FutureDevGuys/personal-containers"
-    revision = "1" * 40
 
     def setUp(self):
         fixture = REPO_ROOT / ".github/tests/fixtures/automerge"
@@ -1033,11 +989,6 @@ class AutomergeCandidateTests(unittest.TestCase):
         self.statuses = json.loads(
             (fixture / "statuses-success.json").read_text(encoding="utf-8")
         )
-        caller = (
-            REPO_ROOT / ".github/tests/fixtures/security-scan-caller.yml"
-        ).read_text(encoding="utf-8")
-        self.caller = caller.replace("1" * 40, self.revision)
-
     def evaluate(self, **overrides):
         values = {
             "repository": self.repository,
@@ -1046,16 +997,25 @@ class AutomergeCandidateTests(unittest.TestCase):
             "commits": self.commits,
             "checks": self.checks,
             "statuses": self.statuses,
-            "caller_text": self.caller,
-            "required_security_revision": self.revision,
         }
         values.update(overrides)
         return candidate.evaluate_candidate(**values)
 
-    def test_trusted_current_head_with_all_required_checks_passes(self):
+    def test_trusted_current_head_with_successful_observed_checks_passes(self):
         result = self.evaluate()
         self.assertTrue(result["eligible"])
         self.assertEqual(result["reason"], "eligible")
+
+    def test_trusted_current_head_without_custom_ci_passes(self):
+        checks = {"total_count": 0, "check_runs": []}
+        statuses = {
+            "sha": self.pull_request["headRefOid"],
+            "total_count": 0,
+            "statuses": [],
+        }
+        result = self.evaluate(checks=checks, statuses=statuses)
+        self.assertTrue(result["eligible"])
+        self.assertIn("0 observed check runs", result["detail"])
 
     def test_same_prefix_untrusted_author_is_blocked(self):
         pull_request = deepcopy(self.pull_request)
@@ -1123,36 +1083,17 @@ class AutomergeCandidateTests(unittest.TestCase):
         del policy["trusted_renovate_identity"]["refresh_committer_email"]
         self.assertEqual(self.evaluate(policy=policy)["reason"], "invalid_policy")
 
-    def test_missing_trivy_is_blocked(self):
-        checks = deepcopy(self.checks)
-        checks["check_runs"] = [
-            check for check in checks["check_runs"] if check["name"] != "trivy / trivy"
-        ]
-        checks["total_count"] = len(checks["check_runs"])
-        result = self.evaluate(checks=checks)
-        self.assertEqual(result["reason"], "required_check_missing")
-
-    def test_docker_candidate_without_owner_contract_is_blocked(self):
+    def test_repository_identity_remains_policy_bound_without_ci(self):
         pull_request = deepcopy(self.pull_request)
         pull_request["headRepository"] = {
-            "id": self.policy["repositories"]["FutureDevGuys/docker-configs"][
-                "head_repository_id"
-            ],
+            "id": "R_wrong",
             "nameWithOwner": "FutureDevGuys/docker-configs",
         }
         result = self.evaluate(
             repository="FutureDevGuys/docker-configs",
             pull_request=pull_request,
         )
-        self.assertEqual(result["reason"], "required_check_missing")
-        self.assertIn("contract-and-history", result["detail"])
-
-    def test_duplicate_required_check_is_blocked(self):
-        checks = deepcopy(self.checks)
-        checks["check_runs"].append(deepcopy(checks["check_runs"][-1]))
-        checks["total_count"] = len(checks["check_runs"])
-        result = self.evaluate(checks=checks)
-        self.assertEqual(result["reason"], "required_check_ambiguous")
+        self.assertEqual(result["reason"], "untrusted_head_repository")
 
     def test_partially_paginated_check_evidence_is_blocked(self):
         checks = deepcopy(self.checks)
@@ -1203,11 +1144,6 @@ class AutomergeCandidateTests(unittest.TestCase):
         statuses["total_count"] = len(statuses["statuses"])
         result = self.evaluate(statuses=statuses)
         self.assertEqual(result["reason"], "status_context_ambiguous")
-
-    def test_stale_or_mutable_security_caller_is_blocked(self):
-        result = self.evaluate(caller_text=self.caller.replace(self.revision, "2" * 40))
-        self.assertEqual(result["reason"], "invalid_security_caller")
-
 
 class AutomergeRefreshTests(unittest.TestCase):
     repository = "FutureDevGuys/personal-containers"
@@ -1437,7 +1373,7 @@ class AutomergeRefreshTests(unittest.TestCase):
         self.assertNotIn("merge|squash|rebase", workflow)
         self.assertNotIn('--"${MERGE_METHOD}"', workflow)
 
-    def test_workflow_refetches_and_revalidates_ci_at_final_merge_boundary(self):
+    def test_workflow_refetches_and_revalidates_observed_evidence_at_merge_boundary(self):
         workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
             encoding="utf-8"
         )
@@ -1448,7 +1384,7 @@ class AutomergeRefreshTests(unittest.TestCase):
         self.assertIn("premerge-commits.json", premerge_block)
         self.assertIn("premerge-checks.json", premerge_block)
         self.assertIn("premerge-statuses.json", premerge_block)
-        self.assertIn("premerge-security-scan.yml", premerge_block)
+        self.assertNotIn("premerge-security-scan.yml", premerge_block)
         self.assertIn("validate_automerge_candidate.py", premerge_block)
         self.assertEqual(workflow.count("validate_automerge_candidate.py"), 2)
         self.assertLess(

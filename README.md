@@ -5,7 +5,7 @@ This repository is the shared automation home for `FutureDevGuys`.
 ## Renovate
 
 - Shared preset: `renovate-config.json`
-- Manual runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
+- Scheduled and manual runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
 - Scope: org autodiscovery for `FutureDevGuys/*`
 - Runtime contract: exact action SHA, exact Renovate tag and image digest, and an
   authenticated shared preset pinned to the workflow commit
@@ -13,9 +13,10 @@ This repository is the shared automation home for `FutureDevGuys`.
   reason-and-age evidence and aged zero-progress runs degrade
 - PR merge policy: the self-hosted runtime force-disables Renovate merge
   execution and Renovate only labels candidates. The separate sweep validates
-  the exact Renovate principal, same-repository ID, commit identity, immutable
-  Trivy caller, and explicit successful checks for the current head SHA before a
-  squash merge with branch deletion.
+  the exact Renovate principal, same-repository ID, commit identity, block
+  labels, and every check or status that exists for the current head SHA before
+  a squash merge with branch deletion. Repositories with intentionally disabled
+  custom CI may have zero check records.
 
 Repo-specific policy remains in each repository's own `renovate.json` (e.g.
 Docker image review rules, version pin managers, submodule pointer policy).
@@ -49,12 +50,10 @@ Supported `datasource` values include `github-releases`, `github-tags`,
 No per-repo `renovate.json` change is needed inside `FutureDevGuys` to use
 this — the org preset picks it up automatically.
 
-Required checks and immutable repository identities live in
-`.github/automerge-policy.json`. Missing, pending, skipped, stale-head, failed,
-or ambiguously duplicated checks block and are recorded as outcome reasons.
-The sweep also rejects a candidate whose current-head security caller is not a
-truthful adopter of the exact checked-out org workflow revision.
-The manually dispatched adoption audit also reads every declared repo-local
+Immutable repository identities live in `.github/automerge-policy.json`.
+Pending, skipped, stale-head, or failed observed checks and statuses block and
+are recorded as outcome reasons. The manually dispatched adoption audit reads
+every declared repo-local
 `renovate.json` and rejects direct Renovate automerge settings, preserving the
 separate sweep as the only automated merge executor.
 
@@ -77,8 +76,15 @@ default to explicit repositories, not broad token autodiscovery.
 
 ## Execution policy
 
-Renovate, automerge, the security contract audit, and security-contract release
-run only through explicit `workflow_dispatch` from this repository's `main`
-branch. There are no schedule, push, or pull-request triggers. Reusable workflows
-remain callable by short repository-local callers, but callers own no policy or
-implementation beyond selecting the exact central workflow revision.
+Renovate runs daily at 03:17 UTC and automerge sweeps at 05:37 and 17:37 UTC;
+both also support explicit `workflow_dispatch` from this repository's `main`
+branch. They are the only automatically triggered workflows in the managed
+repositories. Security workflows remain manual and disabled, while repository-
+local custom workflows remain disabled.
+
+Dependency automation runs centrally because reusable workflows called by a
+private repository are billed to that private repository and cannot read this
+repository's secrets. Renovate autodiscovers non-archived `FutureDevGuys`
+repositories, while `.github/automerge-policy.json` is the explicit automerge
+adoption list. Adding a repository therefore requires central policy only—not a
+caller workflow or duplicated credentials.

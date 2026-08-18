@@ -4,7 +4,7 @@
 
 ### Renovate
 
-Shared Renovate policy lives in `renovate-config.json`. The scheduled
+Shared Renovate policy lives in `renovate-config.json`. The daily
 org runner uses `.github/renovate-config.js` only for self-hosted runtime
 settings such as GitHub platform config, autodiscovery, cache, credentials, and
 `globalExtends`.
@@ -43,20 +43,25 @@ candidate skip reason and PR age. An aged actionable blocker with zero eligible
 or merged progress marks the run degraded; policy-blocked manual work is
 reported but does not count as an actionable blocker.
 
-The automerge sweep uses squash merges and deletes merged Renovate branches. The
+The twice-daily automerge sweep uses squash merges and deletes merged Renovate branches. The
 org repositories are configured to allow squash merges only, so manual PR merges
 use the same history shape as the automation.
 
-`.github/automerge-policy.json` is the fail-closed identity and required-check
-contract. A candidate must have the exact trusted Renovate principal, the
-declared same-repository immutable ID and owner, and only Renovate-authored
-commits. The sweep reads check runs and commit statuses from the candidate's
-current head SHA, requires every declared check (including `trivy / trivy`), and
-requires every observed check/status to be completed successfully. Missing,
-pending, skipped, failed, stale, partial, or duplicate required evidence blocks
-the merge with a machine-readable reason. It also reads `security-scan.yml` at
-that same head and applies the adoption validator against the checked-out org
-revision, so a lookalike check name cannot replace the truthful shared caller.
+`.github/automerge-policy.json` is the fail-closed identity and repository
+adoption contract. A candidate must have the exact trusted Renovate principal,
+the declared same-repository immutable ID and owner, and only Renovate-authored
+commits. Every check run or commit status that exists for the current head must
+be complete and successful; repositories with intentionally disabled custom CI
+may have zero check records. Pending, skipped, failed, stale, partial, or
+ambiguous observed evidence blocks the merge. Block labels, current-base
+containment, GitHub mergeability, central-authority freshness, and exact-head
+compare-and-swap remain mandatory.
+
+The runners live only in this public `.github` repository so their runtime uses
+the central credentials and does not consume private-repository Actions minutes.
+Target repositories do not carry dependency-automation callers. Renovate uses
+org autodiscovery; adding an immutable repository entry to
+`.github/automerge-policy.json` opts it into the merge sweep.
 
 The current Renovate token principal is an ordinary GitHub user, not a dedicated
 bot/App; `context/state.md` tracks that residual identity-separation risk.
@@ -119,7 +124,8 @@ dependency update pull requests out of this caller.
    Validate it with the exact pinned Trivy version; Trivy accepts unknown or
    obsolete key locations without necessarily applying them.
 3. (Optional) Add `.trivyignore.yaml` for documented suppressions (include expiry dates).
-4. Push — Renovate will auto-track the SHA pin from then on.
+4. Push — while security automation remains disabled, later revision changes are
+   manual and do not generate Renovate PRs.
 
 ## Customization
 
@@ -134,19 +140,16 @@ dependency update pull requests out of this caller.
 
 ## SHA Pinning and Renovate
 
-Callers pin to a commit SHA in the `uses:` line. Renovate's `github-actions`
-manager detects this and opens a labeled bump PR when the `.github` repo gets a
-new commit. The org sweep merges that PR only after its identity, current-head
-caller, and repository-specific checks satisfy the automerge policy.
-
-The shared preset treats the `uses` SHA and `workflow_revision` as one
-`github-digest` dependency on the `.github` repository's `main` ref. Renovate
-updates both occurrences in one replacement; a one-sided update is rejected by
-the caller contract before it can appear green.
+Security callers pin to a commit SHA in the `uses:` line. The shared Renovate
+preset intentionally does not manage those disabled callers. If security
+automation is re-enabled later, update both the `uses` SHA and
+`workflow_revision` together and restore an atomic manager only with its caller
+contract tests.
 
 ## Updating the Shared Workflow
 
-Edit in this repo (`.github`) → push to main → all callers receive Renovate PRs on the next cycle.
+Edit in this repo (`.github`) → validate → merge to `main`. Active dependency
+automation consumes the new central behavior on its next scheduled run.
 
 ## Design Decisions
 

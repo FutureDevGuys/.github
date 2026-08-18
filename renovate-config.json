@@ -32,19 +32,6 @@
     },
     {
       "customType": "regex",
-      "description": "Atomically update the shared security workflow call and its enforced revision input from the path-scoped security contract release ref.",
-      "managerFilePatterns": ["/^\\.github/workflows/security-scan\\.ya?ml$/"],
-      "matchStrings": [
-        "    uses:\\s+FutureDevGuys/\\.github/\\.github/workflows/security-scan\\.yml@(?<currentDigest>[0-9a-f]{40})\\s*\\n    with:\\s*\\n      workflow_revision:\\s*[\"']?[0-9a-f]{40}[\"']?"
-      ],
-      "datasourceTemplate": "github-digest",
-      "depNameTemplate": "FutureDevGuys/.github",
-      "packageNameTemplate": "FutureDevGuys/.github",
-      "currentValueTemplate": "security-contract-v1",
-      "autoReplaceStringTemplate": "    uses: FutureDevGuys/.github/.github/workflows/security-scan.yml@{{{newDigest}}}\\n    with:\\n      workflow_revision: \"{{{newDigest}}}\""
-    },
-    {
-      "customType": "regex",
       "description": "Track the exact Renovate runtime tag and digest used by the org GitHub Action.",
       "managerFilePatterns": ["/^\\.github/workflows/renovate\\.yml$/"],
       "matchStrings": [

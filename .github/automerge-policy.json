@@ -15,53 +15,35 @@
     "refresh_committer_email": "97721401+DevGuyRash@users.noreply.github.com"
   },
   "repositories": {
-    "FutureDevGuys/personal-containers": {
-      "repository_id": 1069555737,
-      "head_repository_id": "R_kgDOP8AgGQ",
-      "required_checks": [
-        {"name": "greenfield", "app_slug": "github-actions"},
-        {"name": "skill-projections", "app_slug": "github-actions"},
-        {"name": "trivy / trivy", "app_slug": "github-actions"}
-      ]
+    "FutureDevGuys/.github": {
+      "repository_id": 1182030180,
+      "head_repository_id": "R_kgDORnRZZA",
+      "required_checks": []
     },
     "FutureDevGuys/docker-configs": {
       "repository_id": 974794952,
       "head_repository_id": "R_kgDOOhowyA",
-      "required_checks": [
-        {"name": "contract-and-history", "app_slug": "github-actions"},
-        {"name": "trivy / trivy", "app_slug": "github-actions"}
-      ]
+      "required_checks": []
     },
     "FutureDevGuys/homelab-iac": {
       "repository_id": 1164509898,
       "head_repository_id": "R_kgDORWkCyg",
-      "required_checks": [
-        {"name": "terraform-contract", "app_slug": "github-actions"},
-        {"name": "terraform (terraform)", "app_slug": "github-actions"},
-        {"name": "terraform (terraform/platform)", "app_slug": "github-actions"},
-        {"name": "terraform (terraform/modules/native_lxc)", "app_slug": "github-actions"},
-        {"name": "terraform (terraform/authentik)", "app_slug": "github-actions"},
-        {"name": "terraform (terraform/cloudflare-edge)", "app_slug": "github-actions"},
-        {"name": "terraform (terraform/cloudflare)", "app_slug": "github-actions"},
-        {"name": "terraform (bootstrap/migrations/current-single-host/terraform)", "app_slug": "github-actions"},
-        {"name": "ansible", "app_slug": "github-actions"},
-        {"name": "python", "app_slug": "github-actions"},
-        {"name": "shell", "app_slug": "github-actions"},
-        {"name": "trivy / trivy", "app_slug": "github-actions"}
-      ]
+      "required_checks": []
+    },
+    "FutureDevGuys/personal-containers": {
+      "repository_id": 1069555737,
+      "head_repository_id": "R_kgDOP8AgGQ",
+      "required_checks": []
+    },
+    "FutureDevGuys/shellrc.d": {
+      "repository_id": 998285066,
+      "head_repository_id": "R_kgDOO4CfCg",
+      "required_checks": []
     },
     "FutureDevGuys/system-config": {
       "repository_id": 1198895530,
       "head_repository_id": "R_kgDOR3Wxqg",
-      "required_checks": [
-        {"name": "rust", "app_slug": "github-actions"},
-        {"name": "rust-integration", "app_slug": "github-actions"},
-        {"name": "python", "app_slug": "github-actions"},
-        {"name": "shell", "app_slug": "github-actions"},
-        {"name": "powershell", "app_slug": "github-actions"},
-        {"name": "ansible", "app_slug": "github-actions"},
-        {"name": "trivy / trivy", "app_slug": "github-actions"}
-      ]
+      "required_checks": []
     }
   }
 }
