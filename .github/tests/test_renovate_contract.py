@@ -685,7 +685,7 @@ class RenovatePolicyTests(unittest.TestCase):
         pins = re.findall(r"renovatebot/github-action@([0-9a-f]{40})", workflow)
         self.assertEqual(len(pins), 2)
         self.assertEqual(len(set(pins)), 1)
-        self.assertEqual(pins[0], "22e0a16091fc706b04affe6ae53d5e3358ac4023")
+        self.assertEqual(pins[0], "e09d604f8f803bb527bd8321ed5be06c460b8682")
         runtime_pins = re.findall(
             r"renovate-version:\s*([0-9]+(?:\.[0-9]+){2}@sha256:[0-9a-f]{64})",
             workflow,

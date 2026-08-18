@@ -191,7 +191,7 @@ jobs:
       - name: Self-hosted Renovate (attempt 1 of 2)
         id: renovate_primary
         continue-on-error: true
-        uses: renovatebot/github-action@22e0a16091fc706b04affe6ae53d5e3358ac4023 # v46.1.19
+        uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
         with:
           configurationFile: .github/renovate-config.js
           token: ${{ secrets.RENOVATE_TOKEN }}
@@ -220,7 +220,7 @@ jobs:
 
       - name: Self-hosted Renovate (attempt 2 of 2)
         if: steps.renovate_primary.outcome == 'failure'
-        uses: renovatebot/github-action@22e0a16091fc706b04affe6ae53d5e3358ac4023 # v46.1.19
+        uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
         with:
           configurationFile: .github/renovate-config.js
           token: ${{ secrets.RENOVATE_TOKEN }}
