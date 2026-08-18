@@ -8,14 +8,6 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    branches: [main]
-    paths:
-      - ".github/security-contract-dependencies.v1.json"
-      - ".github/scripts/build_scan_result.py"
-      - ".github/scripts/validate_scan_result.py"
-      - ".github/workflows/security-scan.yml"
-
 permissions:
   contents: write
 

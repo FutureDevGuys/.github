@@ -5,7 +5,7 @@ This repository is the shared automation home for `FutureDevGuys`.
 ## Renovate
 
 - Shared preset: `renovate-config.json`
-- Scheduled runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
+- Manual runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
 - Scope: org autodiscovery for `FutureDevGuys/*`
 - Runtime contract: exact action SHA, exact Renovate tag and image digest, and an
   authenticated shared preset pinned to the workflow commit
@@ -54,7 +54,7 @@ Required checks and immutable repository identities live in
 or ambiguously duplicated checks block and are recorded as outcome reasons.
 The sweep also rejects a candidate whose current-head security caller is not a
 truthful adopter of the exact checked-out org workflow revision.
-The scheduled adoption audit also reads every declared repo-local
+The manually dispatched adoption audit also reads every declared repo-local
 `renovate.json` and rejects direct Renovate automerge settings, preserving the
 separate sweep as the only automated merge executor.
 
@@ -66,7 +66,7 @@ separate sweep as the only automated merge executor.
 - `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` when private Docker Hub access is needed
 - `GHCR_USERNAME` and `GHCR_TOKEN` when private GHCR access is needed
 
-WHEN configuring the scheduled security adoption audit THEN you SHALL provide
+WHEN configuring the manual security adoption audit THEN you SHALL provide
 `SECURITY_AUDIT_TOKEN`; the repository-scoped workflow token cannot enumerate
 private sibling repositories. WHEN enabling the root skill-projection job THEN
 you SHALL also expose that read token to `FutureDevGuys/personal-containers` so
@@ -74,3 +74,11 @@ Actions can check out the exact private submodule gitlinks.
 
 An optional portable Docker runner can extend this preset at runtime. It should
 default to explicit repositories, not broad token autodiscovery.
+
+## Execution policy
+
+Renovate, automerge, the security contract audit, and security-contract release
+run only through explicit `workflow_dispatch` from this repository's `main`
+branch. There are no schedule, push, or pull-request triggers. Reusable workflows
+remain callable by short repository-local callers, but callers own no policy or
+implementation beyond selecting the exact central workflow revision.

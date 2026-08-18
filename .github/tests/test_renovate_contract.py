@@ -524,24 +524,16 @@ class SecurityContractRevisionTests(unittest.TestCase):
         )
         self.assertNotIn('org_revision="$(git rev-parse HEAD)"', workflow)
 
-    def test_release_workflow_tracks_exact_manifest_surface_and_never_force_updates(
+    def test_release_workflow_is_manual_only_and_never_force_updates(
         self,
     ):
-        manifest = self.manifest()
         workflow = (
             REPO_ROOT / ".github/workflows/security-contract-release.yml"
         ).read_text(encoding="utf-8")
-        push_block = workflow.split("  push:\n", 1)[1].split("\npermissions:\n", 1)[0]
-        triggered_paths = {
-            match.group(1)
-            for match in re.finditer(r'^      - "([^"]+)"$', push_block, re.MULTILINE)
-        }
-        expected_paths = {
-            security_revision.DEPENDENCY_MANIFEST_PATH,
-            *(row["path"] for row in manifest["dependencies"]),
-        }
-        self.assertEqual(triggered_paths, expected_paths)
         self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("\n  push:", workflow)
+        self.assertNotIn("\n  schedule:", workflow)
+        self.assertNotIn("\n  pull_request:", workflow)
         self.assertIn("bootstrap_release_ref:", workflow)
         self.assertIn("--field force=false", workflow)
         self.assertNotIn("--field force=true", workflow)
@@ -845,12 +837,32 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertIn("--paginate --slurp", workflow)
         self.assertNotIn("gh pr list", workflow)
 
-    def test_mutating_automerge_has_no_manual_ref_dispatch(self):
+    def test_mutating_automerge_is_manual_and_default_branch_only(self):
         workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn("workflow_dispatch", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("\n  schedule:", workflow)
+        self.assertNotIn("\n  push:", workflow)
+        self.assertNotIn("\n  pull_request:", workflow)
+        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
         self.assertNotIn("DRY_RUN", workflow)
+
+    def test_org_mutating_and_audit_workflows_have_no_automatic_triggers(self):
+        for relative in (
+            ".github/workflows/renovate.yml",
+            ".github/workflows/security-contract.yml",
+            ".github/workflows/security-contract-release.yml",
+        ):
+            workflow = (REPO_ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("workflow_dispatch:", workflow, relative)
+            self.assertNotIn("\n  schedule:", workflow, relative)
+            self.assertNotIn("\n  push:", workflow, relative)
+            self.assertNotIn("\n  pull_request:", workflow, relative)
+        renovate = (
+            REPO_ROOT / ".github/workflows/renovate.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("if: github.ref == 'refs/heads/main'", renovate)
 
     def test_automerge_policy_matches_truthful_security_adopters(self):
         policy = json.loads(
