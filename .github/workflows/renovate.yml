@@ -254,3 +254,24 @@ jobs:
           path: dependency-automation-adopters.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Trigger centralized automerge follow-up
+        if: ${{ success() && (inputs.dryRun == null || inputs.dryRun == 'off') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          EXPECTED_AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          current_authority_sha="$(
+            gh api "repos/FutureDevGuys/.github/commits/main" --jq '.sha'
+          )"
+          if [ "${current_authority_sha}" != "${EXPECTED_AUTHORITY_SHA}" ]; then
+            echo "ERROR: dependency-automation authority advanced during Renovate; refusing a stale follow-up dispatch." >&2
+            exit 1
+          fi
+
+          gh workflow run automerge.yml \
+            --repo FutureDevGuys/.github \
+            --ref main

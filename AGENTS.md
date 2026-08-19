@@ -26,6 +26,10 @@ inventory and use the same valid-marker target rule. A present invalid caller,
 partial inventory, unreadable default commit/tree/blob, mutable shared ref, or
 ambiguous repository identity SHALL fail closed. The organization `.github`
 repository is the implicit policy owner and does not need to call itself.
+After a successful non-dry-run Renovate execution, the central workflow SHALL
+dispatch the central automerge workflow with the central automation credential.
+The scheduled automerge sweep remains the recovery backstop; repository-local
+callers SHALL NOT receive write permissions or duplicate event logic.
 
 ## Merge safety
 
