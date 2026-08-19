@@ -919,6 +919,23 @@ class RenovatePolicyTests(unittest.TestCase):
             self.assertNotIn("\n  push:", workflow, relative)
             self.assertNotIn("\n  pull_request:", workflow, relative)
 
+    def test_successful_renovate_dispatches_central_automerge(self):
+        workflow = (
+            REPO_ROOT / ".github/workflows/renovate.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Trigger centralized automerge follow-up", workflow)
+        self.assertIn(
+            "if: ${{ success() && (inputs.dryRun == null || inputs.dryRun == 'off') }}",
+            workflow,
+        )
+        self.assertIn("GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}", workflow)
+        self.assertIn("EXPECTED_AUTHORITY_SHA: ${{ github.sha }}", workflow)
+        self.assertIn('repos/FutureDevGuys/.github/commits/main', workflow)
+        self.assertIn("gh workflow run automerge.yml", workflow)
+        self.assertIn("--repo FutureDevGuys/.github", workflow)
+        self.assertIn("--ref main", workflow)
+        self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
+
     def test_both_dependency_runners_use_the_same_marker_resolver(self):
         for relative in (
             ".github/workflows/renovate.yml",
