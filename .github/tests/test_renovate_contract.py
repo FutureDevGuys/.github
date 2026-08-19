@@ -863,9 +863,9 @@ class RenovatePolicyTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("refusing a partial-success sweep", workflow)
-        self.assertIn("validate_automerge_repository_visibility.py", workflow)
-        self.assertIn("RENOVATE_TOKEN cannot prove", workflow)
-        self.assertIn("automerge-repository-visibility.json", workflow)
+        self.assertIn("resolve_dependency_automation_adopters.py", workflow)
+        self.assertIn("dependency-automation-adopters.json", workflow)
+        self.assertIn("automerge-effective-policy.json", workflow)
         self.assertNotIn("auth/permissions?); skipping repo", workflow)
 
     def test_automerge_paginates_all_open_pull_requests(self):
@@ -896,17 +896,57 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertNotIn("\n  push:", renovate)
         self.assertNotIn("\n  pull_request:", renovate)
         self.assertIn("if: github.ref == 'refs/heads/main'", renovate)
-        for relative in (
-            ".github/workflows/security-contract.yml",
-            ".github/workflows/security-contract-release.yml",
-        ):
-            workflow = (REPO_ROOT / relative).read_text(encoding="utf-8")
-            self.assertIn("workflow_dispatch:", workflow, relative)
+        automerge = (
+            REPO_ROOT / ".github/workflows/automerge.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", automerge)
+        self.assertIn("\n  schedule:", automerge)
+        automatic = {"renovate.yml", "automerge.yml"}
+        for path in (REPO_ROOT / ".github/workflows").glob("*.yml"):
+            relative = str(path.relative_to(REPO_ROOT))
+            workflow = path.read_text(encoding="utf-8")
+            if path.name in automatic:
+                continue
+            self.assertTrue(
+                "workflow_dispatch:" in workflow or "workflow_call:" in workflow,
+                relative,
+            )
             self.assertNotIn("\n  schedule:", workflow, relative)
             self.assertNotIn("\n  push:", workflow, relative)
             self.assertNotIn("\n  pull_request:", workflow, relative)
 
-    def test_automerge_policy_adopts_all_managed_repositories_without_ci(self):
+    def test_both_dependency_runners_use_the_same_marker_resolver(self):
+        for relative in (
+            ".github/workflows/renovate.yml",
+            ".github/workflows/automerge.yml",
+        ):
+            workflow = (REPO_ROOT / relative).read_text(encoding="utf-8")
+            self.assertEqual(
+                workflow.count("resolve_dependency_automation_adopters.py"),
+                1,
+                relative,
+            )
+            self.assertIn("dependency-automation-adopters.json", workflow, relative)
+
+    def test_manual_risk_classes_and_contract_failures_remain_held(self):
+        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(r'BLOCK_LABELS: "([^"]+)"', workflow)
+        self.assertIsNotNone(match)
+        self.assertTrue(
+            {
+                "manual-review",
+                "major",
+                "migration-required",
+                "database",
+                "stateful",
+                "contract-failing",
+            }.issubset(set(match.group(1).split(",")))
+        )
+        self.assertIn("candidate_contract_failed", workflow)
+
+    def test_automerge_base_policy_preserves_known_identity_assertions(self):
         policy = json.loads(
             (REPO_ROOT / ".github/automerge-policy.json").read_text(encoding="utf-8")
         )

@@ -34,10 +34,11 @@ jobs:
           TARGET_BRANCH: main
           ALLOWED_PREFIXES: "renovate/"
           REQUIRED_LABELS: "automerge-candidate"
-          BLOCK_LABELS: "do-not-merge,manual-review,migration-required,major"
+          BLOCK_LABELS: "do-not-merge,manual-review,migration-required,major,database,stateful,contract-failing"
           MERGE_METHOD: squash
           DELETE_BRANCH: "true"
-          AUTOMERGE_POLICY: .github/automerge-policy.json
+          AUTOMERGE_BASE_POLICY: .github/automerge-policy.json
+          AUTOMERGE_POLICY: automerge-effective-policy.json
           EXPECTED_AUTHORITY_SHA: ${{ github.sha }}
 
         shell: bash
@@ -53,32 +54,19 @@ jobs:
             exit 1
           fi
 
-          # ---- enumerate repos ----
-          echo "Enumerating non-archived repos in ${ORG} and proving adopted visibility…"
-          discovered_pages="automerge-discovered-repository-pages.json"
-          discovered_repositories="automerge-discovered-repositories.json"
-          visibility_result="automerge-repository-visibility.json"
-          if ! gh api "orgs/${ORG}/repos?per_page=100&type=all" \
-            --paginate --slurp > "${discovered_pages}"; then
-            echo "ERROR: complete repository enumeration failed; refusing a partial-success sweep."
-            exit 1
-          fi
-          if ! jq \
-            '[.[][] | select(.archived == false) | {full_name,id,node_id,archived,owner:{login:.owner.login,id:.owner.id,node_id:.owner.node_id}}]' \
-            "${discovered_pages}" > "${discovered_repositories}"; then
-            echo "ERROR: repository enumeration could not be normalized."
-            exit 1
-          fi
-          if ! python3 .github/scripts/validate_automerge_repository_visibility.py \
+          # ---- enumerate and validate repo-local adoption markers ----
+          echo "Resolving active repositories with byte-exact dependency-automation markers…"
+          adoption_result="dependency-automation-adopters.json"
+          if ! python3 .github/scripts/resolve_dependency_automation_adopters.py \
             --organization "${ORG}" \
-            --policy "${AUTOMERGE_POLICY}" \
-            --discovered "${discovered_repositories}" \
-            --output "${visibility_result}"; then
-            echo "ERROR: RENOVATE_TOKEN cannot prove complete adopted-repository visibility."
+            --base-policy "${AUTOMERGE_BASE_POLICY}" \
+            --effective-policy "${AUTOMERGE_POLICY}" \
+            --output "${adoption_result}"; then
+            echo "ERROR: complete marker-based repository adoption could not be proven; refusing a partial-success sweep."
             exit 1
           fi
-          if ! repos_raw="$(jq -r '.repositories[]' "${visibility_result}")"; then
-            echo "ERROR: validated repository list could not be read."
+          if ! repos_raw="$(jq -r '.selected_repositories[]' "${adoption_result}")"; then
+            echo "ERROR: validated marker-adopter list could not be read."
             exit 1
           fi
           if [ -z "${repos_raw}" ]; then
@@ -86,7 +74,7 @@ jobs:
             exit 1
           fi
           mapfile -t repos <<< "${repos_raw}"
-          echo "Policy-adopted repositories with exact visible identities:"
+          echo "Marker-adopted repositories with exact visible identities:"
           for repository in "${repos[@]}"; do echo "  ${repository}"; done
 
           echo ""
@@ -672,8 +660,8 @@ jobs:
         with:
           name: automerge-outcomes
           path: |
-            automerge-discovered-repositories.json
-            automerge-repository-visibility.json
+            dependency-automation-adopters.json
+            automerge-effective-policy.json
             automerge-outcomes.jsonl
             automerge-summary.json
             automerge-candidates/
