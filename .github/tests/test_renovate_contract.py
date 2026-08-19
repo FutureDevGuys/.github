@@ -27,6 +27,10 @@ def load_module(name: str, relative_path: str):
 
 
 outcomes = load_module("automerge_outcomes", ".github/scripts/automerge_outcomes.py")
+risk_paths = load_module(
+    "validate_automerge_risk_paths",
+    ".github/scripts/validate_automerge_risk_paths.py",
+)
 adoption = load_module(
     "audit_security_scan_adoption",
     ".github/scripts/audit_security_scan_adoption.py",
@@ -945,6 +949,60 @@ class RenovatePolicyTests(unittest.TestCase):
             }.issubset(set(match.group(1).split(",")))
         )
         self.assertIn("candidate_contract_failed", workflow)
+        self.assertIn("validate_automerge_risk_paths.py", workflow)
+        self.assertIn("stateful_path", workflow)
+
+    def test_central_risk_paths_hold_stateful_changes_without_labels(self):
+        policy = json.loads(
+            (REPO_ROOT / ".github/automerge-risk-paths.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for filename in (
+            "core/tailscale/docker-compose.yaml",
+            "gaming/pterodactyl/panel/docker-compose.yaml",
+            "core/komodo/docker-compose.core.yaml",
+            "dev/servers/proxy/cli-proxy-api/docker-compose.yaml",
+        ):
+            result = risk_paths.evaluate(
+                "FutureDevGuys/docker-configs",
+                policy,
+                [{"filename": filename}],
+            )
+            self.assertFalse(result["eligible"], filename)
+            self.assertEqual(result["matched_paths"], [filename])
+
+    def test_central_risk_paths_allow_stateless_and_unlisted_repository_changes(self):
+        policy = json.loads(
+            (REPO_ROOT / ".github/automerge-risk-paths.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        stateless = risk_paths.evaluate(
+            "FutureDevGuys/docker-configs",
+            policy,
+            [{"filename": "tools/bots/discord/docker-compose.yaml"}],
+        )
+        unlisted = risk_paths.evaluate(
+            "FutureDevGuys/system-config",
+            policy,
+            [{"filename": "Cargo.lock"}],
+        )
+        self.assertTrue(stateless["eligible"])
+        self.assertTrue(unlisted["eligible"])
+
+    def test_central_risk_path_policy_is_complete_for_persistent_compose_roots(self):
+        policy = json.loads(
+            (REPO_ROOT / ".github/automerge-risk-paths.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        prefixes = policy["repositories"]["FutureDevGuys/docker-configs"][
+            "path_prefixes"
+        ]
+        self.assertEqual(prefixes, sorted(prefixes))
+        self.assertEqual(len(prefixes), len(set(prefixes)))
+        self.assertTrue(all(prefix.endswith("/") for prefix in prefixes))
 
     def test_automerge_base_policy_preserves_known_identity_assertions(self):
         policy = json.loads(

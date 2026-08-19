@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "repositories": {
+    "FutureDevGuys/docker-configs": {
+      "path_prefixes": [
+        "core/komodo/",
+        "core/portainer/",
+        "core/socket-proxy/",
+        "core/tailscale/",
+        "core/traefik/",
+        "data/filebrowser/",
+        "data/gitea/",
+        "data/nextcloud/",
+        "dev/servers/access/guacamole/",
+        "dev/servers/access/rustdesk-server/",
+        "dev/servers/proxy/cli-proxy-api/",
+        "gaming/pterodactyl/panel/",
+        "media/jellyfin/",
+        "monitoring/cadvisor/",
+        "monitoring/grafana/",
+        "monitoring/homepage/",
+        "monitoring/node_exporter/",
+        "monitoring/prometheus/",
+        "monitoring/uptime_kuma/",
+        "ops/duplicati/",
+        "ops/kopia/",
+        "ops/prunemate/",
+        "ops/registry/",
+        "ops/renovate/",
+        "ops/semaphore/",
+        "security/authentik/",
+        "security/directory-server/",
+        "security/midpoint/",
+        "security/step-ca/",
+        "security/trivy/",
+        "tools/links/shlink-privatebin/",
+        "tools/social/postiz/"
+      ]
+    }
+  }
+}

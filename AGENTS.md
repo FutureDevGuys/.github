@@ -33,7 +33,9 @@ Renovate SHALL create and label candidates but SHALL NOT merge. The automerge
 sweep SHALL retain exact repository, author, commit, head, base, check/status,
 central-authority, and merge-postcondition gates. Major, database, stateful,
 migration-bearing, manually held, or contract-failing changes SHALL remain
-ineligible for automatic merge.
+ineligible for automatic merge. The central risk-path policy SHALL hold known
+persistent workload roots independently of Renovate labels; repository callers
+SHALL NOT duplicate that classification.
 
 ## State and verification
 
