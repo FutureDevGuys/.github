@@ -39,6 +39,7 @@ jobs:
           DELETE_BRANCH: "true"
           AUTOMERGE_BASE_POLICY: .github/automerge-policy.json
           AUTOMERGE_POLICY: automerge-effective-policy.json
+          AUTOMERGE_RISK_PATH_POLICY: .github/automerge-risk-paths.json
           EXPECTED_AUTHORITY_SHA: ${{ github.sha }}
 
         shell: bash
@@ -328,6 +329,27 @@ jobs:
                 record_outcome "${REPO}" "${pr}" "${created_at}" skipped refresh_evidence_unavailable true "head_sha=${head_sha}"
                 total_skipped=$((total_skipped+1))
                 continue
+              fi
+
+              risk_result="${candidate_dir}/risk-path-result.json"
+              set +e
+              python3 .github/scripts/validate_automerge_risk_paths.py \
+                --repository "${REPO}" \
+                --policy "${AUTOMERGE_RISK_PATH_POLICY}" \
+                --changed-files "${candidate_dir}/changed-files.json" \
+                --output "${risk_result}"
+              risk_status=$?
+              set -e
+              if [ "${risk_status}" -eq 3 ]; then
+                matched_paths="$(jq -r '.matched_paths | join(",")' "${risk_result}")"
+                echo "Stateful or database-owned paths require manual review; skipping."
+                record_outcome "${REPO}" "${pr}" "${created_at}" skipped stateful_path false "paths=${matched_paths}"
+                total_skipped=$((total_skipped+1))
+                continue
+              fi
+              if [ "${risk_status}" -ne 0 ]; then
+                echo "ERROR: central risk-path policy or changed-file evidence is invalid." >&2
+                exit 1
               fi
 
               if ! python3 .github/scripts/validate_automerge_refresh.py \
