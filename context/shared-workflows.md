@@ -6,11 +6,12 @@
 
 Shared Renovate policy lives in `renovate-config.json`. The daily
 org runner uses `.github/renovate-config.js` only for self-hosted runtime
-settings such as GitHub platform config, autodiscovery, cache, credentials, and
+settings such as GitHub platform config, target injection, cache, credentials, and
 `globalExtends`.
 
-Internal `FutureDevGuys` repos are picked up by the central runner. External
-consumers can add a local `renovate.json` containing:
+Internal `FutureDevGuys` repos are picked up when their exact default commit
+contains the minimal dependency-automation marker documented in `README.md`.
+External consumers can add a local `renovate.json` containing:
 
 ```json
 {
@@ -24,8 +25,8 @@ false even if repository policy drifts. The label contract consumed by the
 separate sweep is:
 
 - `automerge-candidate` allows hands-off merge after required gates.
-- `manual-review`, `major`, and `migration-required` block the shared
-  automerge sweep.
+- `manual-review`, `major`, `migration-required`, `database`, `stateful`, and
+  `contract-failing` block the shared automerge sweep.
 - Major updates are visible manual PRs by default. Use repo-local policy only
   for exceptions that should remain dashboard-approved before a PR exists.
 - Repo-local `renovate.json` files should add only repo-local policy deltas.
@@ -47,9 +48,11 @@ The twice-daily automerge sweep uses squash merges and deletes merged Renovate b
 org repositories are configured to allow squash merges only, so manual PR merges
 use the same history shape as the automation.
 
-`.github/automerge-policy.json` is the fail-closed identity and repository
-adoption contract. A candidate must have the exact trusted Renovate principal,
-the declared same-repository immutable ID and owner, and only Renovate-authored
+`.github/automerge-policy.json` is the fail-closed Renovate identity and
+optional per-repository identity/check assertion contract, not an adoption
+list. The adopter resolver builds an effective policy from the exact identities
+in the current marker receipt and rejects drift for any existing assertion. A
+candidate must have that same-repository immutable ID and owner and only Renovate-authored
 commits. Every check run or commit status that exists for the current head must
 be complete and successful; repositories with intentionally disabled custom CI
 may have zero check records. Pending, skipped, failed, stale, partial, or
@@ -59,9 +62,9 @@ compare-and-swap remain mandatory.
 
 The runners live only in this public `.github` repository so their runtime uses
 the central credentials and does not consume private-repository Actions minutes.
-Target repositories do not carry dependency-automation callers. Renovate uses
-org autodiscovery; adding an immutable repository entry to
-`.github/automerge-policy.json` opts it into the merge sweep.
+Target repositories carry only the byte-exact manual marker. Both central
+runners resolve the same marker set at exact default-branch commits; repository
+callers contain no policy or executable dependency-management behavior.
 The runtime disables the `github-actions` manager for target repositories while
 their custom CI is intentionally disabled. This prevents inactive workflow
 files from creating dependency PR noise without weakening pin management for

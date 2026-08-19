@@ -1,0 +1,13 @@
+name: dependency-automation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adopt:
+    uses: FutureDevGuys/.github/.github/workflows/dependency-automation-marker.yml@1111111111111111111111111111111111111111
+    permissions:
+      contents: read

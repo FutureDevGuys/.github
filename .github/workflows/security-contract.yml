@@ -23,6 +23,7 @@ jobs:
           -pyflakes=
           .github/workflows/*.yml
           .github/tests/fixtures/security-scan-caller.yml
+          .github/tests/fixtures/dependency-automation-caller.yml
 
   scan-contract-tests:
     runs-on: ubuntu-latest

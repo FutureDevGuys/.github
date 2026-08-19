@@ -1,0 +1,15 @@
+name: dependency-automation-marker
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  adopted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Confirm central dependency-automation adoption
+        run: echo "This repository is enrolled in centralized dependency automation."
