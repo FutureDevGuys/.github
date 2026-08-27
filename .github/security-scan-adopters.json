@@ -4,7 +4,7 @@
     "FutureDevGuys/docker-configs",
     "FutureDevGuys/homelab-iac",
     "FutureDevGuys/personal-containers",
-    "FutureDevGuys/system-config"
+    "FutureDevGuys/syscfg"
   ],
   "renovate_config_repositories": [
     "FutureDevGuys/docker-configs",

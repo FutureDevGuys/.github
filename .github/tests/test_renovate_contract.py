@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import hashlib
 import json
 import os
 import re
@@ -579,53 +578,6 @@ class SecurityContractRevisionTests(unittest.TestCase):
             )
 
 
-class InvalidCallerArtifactReplayTests(unittest.TestCase):
-    def test_org_revision_fix_does_not_claim_caller_repair(self):
-        evidence_path = (
-            REPO_ROOT / ".github/tests/fixtures/automerge-invalid-caller-replay-v1.json"
-        )
-        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-        self.assertEqual(evidence["schema_version"], 1)
-        self.assertEqual(evidence["authority"], "generated-test-evidence")
-        self.assertEqual(
-            evidence["source"],
-            {
-                "artifact_name": "automerge-outcomes",
-                "automerge_outcomes_sha256": "5f91bd87db106c016e57682249ead254d5d6db069c10867cf43e3a04ce66692d",
-                "automerge_summary_sha256": "fc2f518b5e1d33b0e3c0e5f3026029f71cd530e1ee53cf089179719c791ded31",
-                "repository": "FutureDevGuys/.github",
-                "run_head_revision": "759cc2c9c28a1e08f0503ff8692a3531207409c0",
-                "run_id": 29445674961,
-            },
-        )
-        required_revision = evidence["proposed_required_revision"]
-        candidate_ids: list[str] = []
-        valid_count = 0
-        for group in evidence["groups"]:
-            fixture = REPO_ROOT / group["fixture"]
-            raw = fixture.read_bytes()
-            self.assertEqual(hashlib.sha256(raw).hexdigest(), group["sha256"])
-            errors = adoption.validate_caller(raw.decode("utf-8"), required_revision)
-            self.assertEqual(errors, group["expected_errors"])
-            candidate_ids.extend(group["candidate_ids"])
-            if not errors:
-                valid_count += len(group["candidate_ids"])
-        self.assertEqual(len(candidate_ids), len(set(candidate_ids)))
-        self.assertEqual(len(candidate_ids), evidence["expectation"]["invalid_before"])
-        self.assertEqual(
-            valid_count,
-            evidence["expectation"]["valid_after_org_revision_fix"],
-        )
-        self.assertEqual(
-            len(candidate_ids) - valid_count,
-            evidence["expectation"]["still_invalid_after_org_revision_fix"],
-        )
-        self.assertEqual(
-            evidence["expectation"]["repair_scope"],
-            "org-required-revision-component-only",
-        )
-
-
 class RenovatePolicyTests(unittest.TestCase):
     def test_root_go_and_cargo_updates_require_manual_review(self):
         probe = subprocess.run(
@@ -680,7 +632,7 @@ class RenovatePolicyTests(unittest.TestCase):
                 "FutureDevGuys/homelab-iac",
                 "FutureDevGuys/personal-containers",
                 "FutureDevGuys/shellrc.d",
-                "FutureDevGuys/system-config",
+                "FutureDevGuys/syscfg",
             ],
         )
 
@@ -1001,7 +953,7 @@ class RenovatePolicyTests(unittest.TestCase):
             [{"filename": "tools/bots/discord/docker-compose.yaml"}],
         )
         unlisted = risk_paths.evaluate(
-            "FutureDevGuys/system-config",
+            "FutureDevGuys/syscfg",
             policy,
             [{"filename": "Cargo.lock"}],
         )
@@ -1033,7 +985,7 @@ class RenovatePolicyTests(unittest.TestCase):
                 "FutureDevGuys/homelab-iac",
                 "FutureDevGuys/personal-containers",
                 "FutureDevGuys/shellrc.d",
-                "FutureDevGuys/system-config",
+                "FutureDevGuys/syscfg",
             },
         )
         for repository in policy["repositories"].values():

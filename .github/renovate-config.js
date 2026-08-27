@@ -35,7 +35,7 @@ const repositoriesWithDisabledCustomCi = [
   'FutureDevGuys/homelab-iac',
   'FutureDevGuys/personal-containers',
   'FutureDevGuys/shellrc.d',
-  'FutureDevGuys/system-config',
+  'FutureDevGuys/syscfg',
 ];
 
 if (!exactPresetPattern.test(preset)) {

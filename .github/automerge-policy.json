@@ -40,7 +40,7 @@
       "head_repository_id": "R_kgDOO4CfCg",
       "required_checks": []
     },
-    "FutureDevGuys/system-config": {
+    "FutureDevGuys/syscfg": {
       "repository_id": 1198895530,
       "head_repository_id": "R_kgDOR3Wxqg",
       "required_checks": []
