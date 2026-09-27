@@ -158,10 +158,7 @@ class Sweep:
             if labels & HARD_HOLDS:
                 self.record(repository, number, "human", "explicit_hold")
                 return
-            if labels & REVIEW_HOLDS or "automerge-candidate" not in labels:
-                if not human_approved(api, repository, pr):
-                    self.record(repository, number, "human", "approval_required")
-                    return
+            needs_approval = bool(labels & REVIEW_HOLDS) or "automerge-candidate" not in labels
             head = pr["head"]["sha"]
             base = api.api(f"{prefix}/commits/{quote(default_branch, safe='')}")["sha"]
             commits = api.pages(f"{prefix}/pulls/{number}/commits")
@@ -205,6 +202,9 @@ class Sweep:
                     self.record(repository, number, "pending", "refresh_in_progress")
                     return
                 continue
+            if needs_approval and not human_approved(api, repository, pr):
+                self.record(repository, number, "human", "approval_required")
+                return
             checks = api.api(f"{prefix}/commits/{head}/check-runs?per_page=100")
             statuses = api.api(f"{prefix}/commits/{head}/status?per_page=100")
             candidate = evaluate_candidate(repository=repository, policy=self.policy, pull_request=normalized, commits=commits, checks=checks, statuses=statuses)
@@ -263,6 +263,12 @@ class Sweep:
                     api.api(f"{prefix}/git/refs/{ref}", "DELETE")
             except ApiError as error:
                 if error.status != 404:
+                    # GitHub may auto-delete the branch between our read and DELETE.
+                    try:
+                        api.api(f"{prefix}/git/ref/{ref}")
+                    except ApiError as reread:
+                        if reread.status == 404:
+                            return
                     self.record(repository, number, "pending", "branch_cleanup_required")
             return
         self.record(repository, number, "pending", "candidate_changed_during_validation")

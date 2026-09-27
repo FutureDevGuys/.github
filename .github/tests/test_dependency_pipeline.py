@@ -141,6 +141,14 @@ class MergePipelineTests(unittest.TestCase):
         self.assertEqual(self.sweep.recovery, {self.api.repository})
         self.assertFalse(self.api.pr["merged"])
 
+    def test_manual_hold_is_rebuilt_before_requiring_current_head_approval(self):
+        self.api.pr["labels"].append({"name": "manual-review"})
+        self.api.commits[0]["commit"]["verification"]["verified"] = False
+        self.run_candidate()
+        self.assertEqual(self.sweep.records[-1]["reason"], "signed_rebuild_required")
+        self.assertEqual(self.sweep.recovery, {self.api.repository})
+        self.assertFalse(self.api.pr["merged"])
+
     def test_refreshed_candidate_is_revalidated_and_merged_in_same_sweep(self):
         self.api.behind = True
         self.api.pr["base"]["sha"] = "9" * 40
@@ -173,6 +181,24 @@ class MergePipelineTests(unittest.TestCase):
         self.run_candidate()
         self.assertTrue(self.api.pr["merged"])
         self.assertFalse(any(op[0] == "DELETE" for op in self.api.operations))
+
+    def test_platform_auto_deletion_race_is_successful_cleanup(self):
+        original = self.api.api
+        deleted = False
+
+        def api(path, method="GET", data=None):
+            nonlocal deleted
+            if method == "DELETE":
+                deleted = True
+                raise merger.ApiError(422)
+            if deleted and "/git/ref/" in path:
+                raise merger.ApiError(404)
+            return original(path, method, data)
+
+        self.api.api = api
+        self.run_candidate()
+        self.assertTrue(self.api.pr["merged"])
+        self.assertEqual([row["reason"] for row in self.sweep.records], ["merge_verified"])
 
     def test_current_head_maintainer_approval_releases_manual_hold(self):
         self.api.pr["labels"].append({"name": "manual-review"})
@@ -263,6 +289,8 @@ class GenericPolicyTests(unittest.TestCase):
         self.assertIn('cron: "37 * * * *"', merge)
         self.assertIn('ALLOW_RECOVERY: ${{ !inputs.recovery }}', renovate)
         self.assertIn('inputs.allowRecovery', merge)
+        self.assertNotIn('inputs.allowRecovery == null', merge)
+        self.assertIn("github.event_name == 'schedule' || inputs.allowRecovery", merge)
         self.assertIn('-f recovery=true', merge)
         for text in (renovate, merge):
             self.assertNotIn('path: automerge-candidates/', text)

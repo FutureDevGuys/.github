@@ -12,6 +12,8 @@ Minor, patch, pin, digest, lockfile-maintenance and rollback updates are automat
 
 For existing manually held PRs, an approved review from a maintainer must target the current head. A maintainer who is also the PR author can instead add a label named `merge:<full-head-SHA>`, for example `merge:0123456789abcdef0123456789abcdef01234567`. The sweep verifies the labeling actor's write access and the exact current head. `do-not-merge`, failing contracts, failing/pending checks, and GitHub branch protection remain effective. A newer commit invalidates an earlier head-specific approval.
 
+The sweep refreshes or requests a signed rebuild of a trusted manually held PR before waiting for approval, so the reviewer receives a current merge candidate. Dashboard approval controls creation of new PRs; when migrating an existing repository to a new approval policy, apply an explicit review hold to already-open affected PRs before starting a merge sweep. Renovate preserves labels edited by another account, so an initial migration may also require reconciling old missing classification labels once.
+
 ### Latest Docker images
 
 Use normal Compose syntax: `image: vendor/application:latest@sha256:<current-digest>`. Renovate's built-in Compose manager updates the digest while preserving `latest`. The shared preset enables digest pinning and applies no release-age delay to digest updates. A plain `latest` tag is initially pinned by Renovate; no executable comment or per-image central rule is needed. A Git-backed deployment owner can deploy the merged change through its normal webhook.
