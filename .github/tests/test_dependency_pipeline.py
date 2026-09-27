@@ -224,6 +224,22 @@ class MergePipelineTests(unittest.TestCase):
         self.run_candidate()
         self.assertFalse(self.api.pr["merged"])
 
+    def test_revoked_review_before_merge_is_not_authorization(self):
+        self.api.pr["labels"].append({"name": "manual-review"})
+        self.api.reviews = [{"state": "APPROVED", "commit_id": self.api.head, "user": {"login": "maintainer"}}]
+        original = self.api.api
+
+        def api(path, method="GET", data=None):
+            result = original(path, method, data)
+            if path.endswith("/pulls/1") and self.api.pr_reads >= 2:
+                self.api.reviews[0]["state"] = "DISMISSED"
+            return result
+
+        self.api.api = api
+        self.run_candidate()
+        self.assertFalse(self.api.pr["merged"])
+        self.assertEqual(self.sweep.records[-1]["reason"], "approval_required")
+
     def test_label_approval_is_bound_to_current_head_and_authorized_actor(self):
         marker = "merge:" + self.api.head
         self.api.pr["labels"] += [{"name": "manual-review"}, {"name": marker}]
