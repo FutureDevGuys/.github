@@ -43,6 +43,7 @@ def evaluate_merge_postcondition(
     pull_request: dict[str, Any],
     merge_commit: dict[str, Any],
     comparison: dict[str, Any],
+    default_branch: str = "main",
 ) -> dict[str, Any]:
     if (
         SHA_RE.fullmatch(authorized_head_sha) is None
@@ -64,7 +65,7 @@ def evaluate_merge_postcondition(
     merged_at = pull_request.get("mergedAt")
     if (
         pull_request.get("state") != "MERGED"
-        or pull_request.get("baseRefName") != "main"
+        or pull_request.get("baseRefName") != default_branch
         or pull_request.get("headRefOid") != authorized_head_sha
         or not isinstance(merge_commit_sha, str)
         or SHA_RE.fullmatch(merge_commit_sha) is None

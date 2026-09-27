@@ -4,69 +4,36 @@ This repository is the shared automation home for `FutureDevGuys`.
 
 ## Renovate
 
-- Shared preset: `renovate-config.json`
-- Scheduled and manual runtime: `.github/renovate-config.js` plus `.github/workflows/renovate.yml`
-- Scope: the policy owner plus active, non-fork repositories carrying the exact
-  dependency-automation marker
-- Runtime contract: exact action SHA, exact Renovate tag and image digest, and an
-  authenticated shared preset pinned to the workflow commit
-- Failure contract: at most two Renovate attempts per run; automerge skips emit
-  reason-and-age evidence and aged zero-progress runs degrade
-- PR merge policy: the self-hosted runtime force-disables Renovate merge
-  execution and Renovate only labels candidates. The separate sweep validates
-  the exact Renovate principal, same-repository ID, commit identity, block
-  labels, and every check or status that exists for the current head SHA before
-  a squash merge with branch deletion. Repositories with intentionally disabled
-  custom CI may have zero check records.
+The shared preset is `renovate-config.json`; `.github/renovate-config.js` contains runtime configuration only. Active repositories opt in with the minimal dependency-automation marker below. They inherit the shared defaults without needing a local Renovate configuration. Repositories can add ordinary `renovate.json` package rules for their own approval requirements, disabled managers, or native post-upgrade tasks.
 
-Repo-specific policy remains in each repository's own `renovate.json` (e.g.
-Docker image review rules, version pin managers, submodule pointer policy).
-Major updates are created as visible manual PRs with block labels; repo-local
-policy can opt individual migration-heavy classes into dashboard approval.
+The default pipeline runs Renovate every six hours, then immediately runs the central merge sweep. The sweep also runs hourly for recovery. Renovate creates signed commits and labels candidates; the separate merge owner verifies repository and author identity, current base/head, all observed check/status results, GitHub mergeability, and merge postconditions. It can refresh a trusted branch and re-evaluate it in the same run. Conflicts or unsigned legacy branches request native Renovate reconstruction, with at most one targeted recovery run in a dispatch chain.
 
-Participating `FutureDevGuys` repositories do not need a local Renovate config;
-the marker below opts them into the central runner. External consumers can
-extend the policy with:
+Minor, patch, pin, digest, lockfile-maintenance and rollback updates are automatically eligible after the configured release-age and check requirements. Major upgrades and replacements require one Dependency Dashboard checkbox before PR creation; after approval they follow the same checked merge path. There is no central list of workload paths or repository-specific exceptions. Each repository owns any additional approval policy.
 
-```json
-{
-  "extends": ["github>FutureDevGuys/.github:renovate-config"]
-}
-```
+For existing manually held PRs, an approved review from a maintainer must target the current head. A maintainer who is also the PR author can instead add a label named `merge:<full-head-SHA>`, for example `merge:0123456789abcdef0123456789abcdef01234567`. The sweep verifies the labeling actor's write access and the exact current head. `do-not-merge`, failing contracts, failing/pending checks, and GitHub branch protection remain effective. A newer commit invalidates an earlier head-specific approval.
 
-### Version pin annotations
+### Latest Docker images
 
-The shared preset includes a generic regex manager that tracks
-`# renovate:` comment annotations in any YAML file across the org.
-To pin a version and let Renovate auto-bump it, add this pattern:
+Use normal Compose syntax: `image: vendor/application:latest@sha256:<current-digest>`. Renovate's built-in Compose manager updates the digest while preserving `latest`. The shared preset enables digest pinning and applies no release-age delay to digest updates. A plain `latest` tag is initially pinned by Renovate; no executable comment or per-image central rule is needed. A Git-backed deployment owner can deploy the merged change through its normal webhook.
 
-```yaml
-# renovate: datasource=github-releases depName=owner/repo
-my_tool_version: "v1.2.3"
-```
+### Version annotations
 
-The variable must end with `_version` and the value must be quoted.
-Supported `datasource` values include `github-releases`, `github-tags`,
-`pypi`, `npm`, etc. — see [Renovate datasources](https://docs.renovatebot.com/modules/datasource/).
+The shared regex manager supports `# renovate: datasource=github-releases depName=owner/repo` followed by a YAML field such as `my_tool_version: "v1.2.3"`. Field names end in `_version` or `_VERSION`; this is for versions not already understood by a native manager. It does not turn arbitrary Compose comments into policy directives.
 
-No per-repo `renovate.json` change is needed inside `FutureDevGuys` to use
-this; the central runtime injects the shared preset at its exact workflow
-commit.
+### Optional repository-owned hooks
 
-The sweep derives exact repository identities from the same default-commit
-marker receipt used by Renovate. `.github/automerge-policy.json` retains the
-trusted Renovate identity and optional per-repository identity/check
-assertions; it is not a second adoption list, and an unlisted valid marker is
-still adopted automatically.
-Pending, skipped, stale-head, or failed observed checks and statuses block and
-are recorded as outcome reasons. The manually dispatched adoption audit reads
-every declared repo-local
-`renovate.json` and rejects direct Renovate automerge settings, preserving the
-separate sweep as the only automated merge executor.
+Native `postUpgradeTasks` are opt-in. The shared runtime permits only a fixed Python command form that verifies a repo-owned script's SHA-256 before execution, clears its inherited environment, and supplies one literal argument. The approved relative path, hash, argument, and output `fileFilters` live in that repository's `renovate.json`, and must be updated alongside its script. The command-pattern contract is tested in `.github/tests/test_dependency_pipeline.py`. This is a source-integrity and credential-environment boundary, not a sandbox for untrusted repository owners. Do not enable arbitrary shell commands in the shared runner.
+
+### Privacy and API limits
+
+Detailed logs and private merge evidence are encrypted before upload; only aggregate outcome counts are published in plaintext. The complete Renovate lookup/HTTP/repository cache is also encrypted and restored between runs. Encryption uses the existing automation credential through GnuPG's standard-input interface, so credential rotation intentionally invalidates older cache/diagnostic artifacts. Administrators with custody of that credential can decrypt retained artifacts with `.github/scripts/private_artifacts.py`; never paste the credential into arguments or logs.
+
+The runtime passes both the platform token and `GITHUB_COM_TOKEN`, with an explicit authenticated GitHub host rule. This avoids anonymous GitHub API limits during preset/changelog/tool lookup. Small per-repository branch/PR limits and the complete persistent cache reduce repeat work. Network/server failures get one bounded retry; authentication/configuration failures and exhausted API budgets do not trigger a futile retry loop. Scheduled runs provide recovery after provider outages or quota resets.
 
 ## Required Actions secrets
 
-- `RENOVATE_TOKEN`
+- `RENOVATE_TOKEN` for the configured automation principal
+- `RENOVATE_GIT_PRIVATE_KEY`, a dedicated signing-only private key whose public key is registered with that principal
 - `SECURITY_AUDIT_TOKEN` with read access to every private repository declared
   in `.github/security-scan-adopters.json`
 - `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` when private Docker Hub access is needed
@@ -83,18 +50,11 @@ default to explicit repositories, not broad token autodiscovery.
 
 ## Execution policy
 
-Renovate runs daily at 03:17 UTC and automerge sweeps at 05:37 and 17:37 UTC;
-both also support explicit `workflow_dispatch` from this repository's `main`
-branch. They are the only automatically triggered workflows in the managed
-repositories. Security workflows remain manual and disabled, while repository-
-local custom workflows remain disabled.
+Renovate runs every six hours at minute 17; the merge recovery sweep runs hourly at minute 37. Both support `workflow_dispatch` from this repository's `main`. These remain the only automatically triggered custom workflows. Security and owner-specific CI remain subject to their separately declared policy.
 
-Dependency automation runs centrally because reusable workflows called by a
-private repository are billed to that private repository and cannot read this
-repository's secrets. Both scheduled runners exact-resolve every active,
-non-fork organization repository, read the marker only from its recorded
-default-branch commit, and fail the whole run for a present invalid marker or
-incomplete inventory. The `.github` policy owner is included implicitly.
+Both runners derive adopters from exact default-branch commits and the same minimal marker. Ambiguous identities, unreadable or partial inventory, and malformed present markers fail closed. The merge workflow derives its repository identities from that receipt; optional identity assertions follow immutable repository IDs through renames. The policy owner is included implicitly.
+
+The historical signing identity can be supplied through the optional `RENOVATE_GIT_IGNORED_AUTHORS` Actions variable during migration so Renovate can rebuild its own old branches. It does not authorize overwriting unrelated human edits. The current Git author is derived from the authenticated GitHub principal's verified noreply identity.
 
 ## Dependency-automation marker
 
@@ -124,9 +84,4 @@ permissions, inputs, secrets, conditions, steps, or an additional job. Shared
 behavior remains in this repository; normal scheduled runs do not invoke the
 marker workflow.
 
-GitHub Actions dependencies in target repositories are ignored while their
-custom CI remains intentionally disabled; the central `.github` repository
-continues to manage its own active Renovate and automerge action pins.
-Root Go and Cargo updates receive `manual-review` because they participate in
-cross-language frozen-source and release contracts that Renovate cannot
-regenerate safely.
+Repository-specific CI opt-outs and cross-owner release approvals belong in local Renovate configuration; they are not shared defaults.

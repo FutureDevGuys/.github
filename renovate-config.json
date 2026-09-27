@@ -7,8 +7,7 @@
     ":semanticCommits",
     ":configMigration",
     "docker:pinDigests",
-    "helpers:pinGitHubActionDigests",
-    "mergeConfidence:all-badges"
+    "helpers:pinGitHubActionDigests"
   ],
   "platformAutomerge": false,
   "rebaseWhen": "behind-base-branch",
@@ -19,13 +18,16 @@
     "vendor/**",
     "**/vendor/**"
   ],
-  "prConcurrentLimit": 12,
-  "prHourlyLimit": 6,
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 3,
   "customManagers": [
     {
       "customType": "regex",
       "description": "Track any # renovate: annotated version pin in YAML files.",
-      "managerFilePatterns": ["**/*.yml", "**/*.yaml"],
+      "managerFilePatterns": [
+        "**/*.yml",
+        "**/*.yaml"
+      ],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>[^\\s]+)\\s+depName=(?<depName>[^\\s]+)(?:\\s+versioning=(?<versioning>[^\\s\\n]+))?\\n\\s*\\w+_(?:version|VERSION):\\s*(?:\\$\\{[^:}]+:-)?[\"']?(?<currentValue>[^\"'\\s\\n}]+)"
       ]
@@ -33,9 +35,11 @@
     {
       "customType": "regex",
       "description": "Track the exact Renovate runtime tag and digest used by the org GitHub Action.",
-      "managerFilePatterns": ["/^\\.github/workflows/renovate\\.yml$/"],
+      "managerFilePatterns": [
+        "/^\\.github/workflows/renovate\\.yml$/"
+      ],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>docker)\\s+depName=(?<depName>renovate/renovate)\\n\\s*renovate-version:\\s*[\"']?(?<currentValue>[^@\"'\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+        "#\\s*renovate:\\s*datasource=(?<datasource>docker)\\s+depName=(?<depName>renovate/renovate)\\n\\s*RENOVATE_IMAGE:\\s*[\"\\']?renovate/renovate:(?<currentValue>[^@\"\\'\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
       ]
     }
   ],
@@ -50,61 +54,113 @@
       "enabled": false
     },
     {
-      "description": "Create visible manual PRs for major updates and label them for shared automerge sweep exclusion.",
-      "matchUpdateTypes": ["major"],
-      "automerge": false,
-      "addLabels": ["manual-review", "major"]
-    },
-    {
       "description": "Label ordinary non-major updates for the identity-and-check-gated org sweep.",
-      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest"],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest",
+        "lockFileMaintenance",
+        "rollback"
+      ],
       "automerge": false,
       "minimumReleaseAge": "3 days",
       "internalChecksFilter": "strict",
-      "addLabels": ["automerge-candidate"]
+      "addLabels": [
+        "automerge-candidate"
+      ]
     },
     {
       "description": "Delay single-segment Docker Hub image updates so namespace resolution can settle.",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["/^[^.:/]+([/][^/]+)*$/"],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "/^[^.:/]+([/][^/]+)*$/"
+      ],
       "minimumReleaseAge": "3 days",
       "internalChecksFilter": "strict"
     },
     {
       "description": "Label Docker digest refreshes for the identity-and-check-gated org sweep.",
-      "matchDatasources": ["docker"],
-      "matchUpdateTypes": ["digest"],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "digest"
+      ],
       "automerge": false,
-      "addLabels": ["automerge-candidate"]
+      "addLabels": [
+        "automerge-candidate"
+      ]
     },
     {
       "description": "Label Dockerfile and Docker Compose patch/minor updates for the org sweep.",
-      "matchManagers": ["dockerfile", "docker-compose"],
-      "matchUpdateTypes": ["patch", "minor"],
+      "matchManagers": [
+        "dockerfile",
+        "docker-compose"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
       "automerge": false,
       "minimumReleaseAge": "3 days",
       "internalChecksFilter": "strict",
-      "addLabels": ["automerge-candidate"]
+      "addLabels": [
+        "automerge-candidate"
+      ]
     },
     {
       "description": "Label GitHub Actions routine updates for the org sweep.",
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["digest", "minor", "patch", "pin", "pinDigest"],
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest"
+      ],
       "automerge": false,
       "minimumReleaseAge": "3 days",
       "internalChecksFilter": "strict",
-      "addLabels": ["automerge-candidate"]
+      "addLabels": [
+        "automerge-candidate"
+      ]
     },
     {
       "description": "Group GitHub Actions patch updates together when their risk class matches.",
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["patch"],
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
       "groupName": "gha-patches",
       "automerge": false
     },
     {
+      "description": "Require one Dependency Dashboard approval for major upgrades and package replacements; then follow the normal checked merge path.",
+      "matchUpdateTypes": [
+        "major",
+        "replacement"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true,
+      "addLabels": [
+        "automerge-candidate"
+      ],
+      "minimumReleaseAge": null
+    },
+    {
       "description": "Do not apply release-age gates to immutable digest and digest-pin updates.",
-      "matchUpdateTypes": ["digest", "pinDigest"],
+      "matchUpdateTypes": [
+        "digest",
+        "pinDigest"
+      ],
       "minimumReleaseAge": null,
       "internalChecksFilter": "strict"
     }

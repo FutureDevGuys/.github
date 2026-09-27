@@ -1,33 +1,19 @@
 name: Renovate
 
 concurrency:
-  group: renovate-${{ github.repository }}
+  group: dependency-renovate
   cancel-in-progress: false
 
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       repoCache:
-        description: "Repository cache mode"
+        description: "Encrypted cache mode"
         type: choice
         default: enabled
-        options:
-          - enabled
-          - disabled
-          - reset
-      logLevel:
-        description: "Renovate log level"
-        type: choice
-        default: info
-        options:
-          - info
-          - debug
-      validateCreds:
-        description: "Validate credentials before running Renovate"
-        type: boolean
-        default: true
+        options: [enabled, disabled, reset]
       repositories:
         description: "Optional comma-separated subset of valid marker adopters."
         required: false
@@ -37,241 +23,136 @@ on:
         description: "Renovate dry-run mode"
         type: choice
         default: "off"
-        options:
-          - "off"
-          - lookup
-          - full
+        options: ["off", lookup, full]
+      recovery:
+        description: "Recovery pass; do not dispatch another Renovate recovery"
+        type: boolean
+        default: false
+
 permissions:
   contents: read
   actions: write
 
 env:
-  cache_archive: renovate_repo_cache.tar.gz
-  cache_dir: /tmp/renovate/cache/renovate/repository
-  cache_key: renovate-repo-cache
-  renovate_org: FutureDevGuys
+  # renovate: datasource=docker depName=renovate/renovate
+  RENOVATE_IMAGE: renovate/renovate:44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81
 
 jobs:
   renovate:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
-
     env:
-      RENOVATE_AUTODISCOVER: "false"
-      RENOVATE_CONFIG_PRESET: github>FutureDevGuys/.github:renovate-config#${{ github.sha }}
+      GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+      RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+      GITHUB_COM_TOKEN: ${{ secrets.GITHUB_COM_TOKEN || secrets.RENOVATE_TOKEN }}
+      RENOVATE_GIT_PRIVATE_KEY: ${{ secrets.RENOVATE_GIT_PRIVATE_KEY }}
+      RENOVATE_GIT_IGNORED_AUTHORS: ${{ vars.RENOVATE_GIT_IGNORED_AUTHORS }}
+      RENOVATE_CONFIG_PRESET: github>${{ github.repository }}:renovate-config#${{ github.sha }}
       RENOVATE_DRY_RUN: ${{ inputs.dryRun != 'off' && inputs.dryRun || '' }}
-
+      RENOVATE_REPOSITORY_CACHE: ${{ inputs.repoCache || 'enabled' }}
+      ARTIFACT_ENCRYPTION_KEY: ${{ secrets.RENOVATE_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
     steps:
-      - name: Checkout (optional for Renovate)
+      - name: Checkout exact automation source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - name: Preflight - Validate token, exact preset, and adopter contract
-        id: adopters
+      - name: Resolve adopters and authenticated source
         shell: bash
         env:
-          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
           REQUESTED_REPOSITORIES: ${{ inputs.repositories || '' }}
         run: |
           set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/dependency-private"
+          gh api "repos/$GITHUB_REPOSITORY/contents/renovate-config.json?ref=$GITHUB_SHA" --jq .sha >/dev/null
+          identity="$(gh api user --jq '"\(.id)+\(.login)"')"
+          echo "RENOVATE_GIT_AUTHOR=Renovate Bot <${identity}@users.noreply.github.com>" >> "$GITHUB_ENV"
+          python3 .github/scripts/resolve_dependency_automation_adopters.py \
+            --organization "$GITHUB_REPOSITORY_OWNER" \
+            --requested "$REQUESTED_REPOSITORIES" \
+            --output dependency-automation-adopters.json \
+            > "$RUNNER_TEMP/dependency-private/adoption.log" 2>&1
 
-          if [ -z "${RENOVATE_TOKEN:-}" ]; then
-            echo "ERROR: secrets.RENOVATE_TOKEN is missing/empty."
-            exit 1
-          fi
-
-          user_code="$(curl -sS -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${RENOVATE_TOKEN}" \
-            https://api.github.com/user)"
-
-          if [ "${user_code}" != "200" ]; then
-            echo "ERROR: RENOVATE_TOKEN failed /user check (HTTP ${user_code})."
-            exit 1
-          fi
-
-          command -v gh >/dev/null 2>&1 || { echo "ERROR: gh is required for repo autodiscovery preflight."; exit 1; }
-          command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required for repo autodiscovery preflight."; exit 1; }
-
-          if [[ ! "${RENOVATE_CONFIG_PRESET}" =~ ^github\>FutureDevGuys/\.github:renovate-config\#[0-9a-f]{40}$ ]]; then
-            echo "ERROR: RENOVATE_CONFIG_PRESET must use the exact org preset at a 40-character commit SHA." >&2
-            exit 1
-          fi
-          preset_revision="${RENOVATE_CONFIG_PRESET##*#}"
-          GH_TOKEN="${RENOVATE_TOKEN}" gh api \
-            "repos/FutureDevGuys/.github/contents/renovate-config.json?ref=${preset_revision}" \
-            --jq '.sha' >/dev/null
-          echo "OK: authenticated read of exact shared preset revision ${preset_revision}."
-
-          GH_TOKEN="${RENOVATE_TOKEN}" \
-            python3 .github/scripts/resolve_dependency_automation_adopters.py \
-              --organization "${{ env.renovate_org }}" \
-              --requested "${REQUESTED_REPOSITORIES}" \
-              --output dependency-automation-adopters.json
-          repositories="$(jq -r '.selected_repositories | join(",")' dependency-automation-adopters.json)"
-          if [ -z "${repositories}" ]; then
-            echo "ERROR: adopter resolution produced no repositories." >&2
-            exit 1
-          fi
-          echo "repositories=${repositories}" >> "${GITHUB_OUTPUT}"
-
-      - name: Preflight - Validate Docker Hub login (optional)
-        if: ${{ inputs.validateCreds == null || inputs.validateCreds }}
-        shell: bash
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${DOCKERHUB_USERNAME:-}" ] && [ -z "${DOCKERHUB_TOKEN:-}" ]; then
-            echo "Docker Hub secrets not set; skipping Docker Hub auth check."
-            exit 0
-          fi
-          if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
-            echo "ERROR: Docker Hub auth is partially configured. Provide BOTH DOCKERHUB_USERNAME and DOCKERHUB_TOKEN."
-            exit 1
-          fi
-
-          printf '%s' "${DOCKERHUB_TOKEN}" | docker login --username "${DOCKERHUB_USERNAME}" --password-stdin
-
-      - name: Preflight - Validate GHCR login (optional)
-        if: ${{ inputs.validateCreds == null || inputs.validateCreds }}
-        shell: bash
-        env:
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${GHCR_USERNAME:-}" ] && [ -z "${GHCR_TOKEN:-}" ]; then
-            echo "GHCR secrets not set; skipping GHCR auth check."
-            exit 0
-          fi
-
-          if [ -z "${GHCR_USERNAME:-}" ] || [ -z "${GHCR_TOKEN:-}" ]; then
-            echo "ERROR: GHCR auth is partially configured. Provide BOTH GHCR_USERNAME and GHCR_TOKEN."
-            exit 1
-          fi
-
-          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
-
-      - name: Download previous Renovate repo cache artifact
+      - name: Download previous encrypted lookup and repository cache
         if: ${{ (inputs.repoCache || 'enabled') == 'enabled' }}
         continue-on-error: true
         uses: dawidd6/action-download-artifact@57aa996fc1713cc1579039614f4645a7f4841fd4 # v23
         with:
-          name: ${{ env.cache_key }}
+          workflow: renovate.yml
+          branch: main
+          name: renovate-cache-encrypted
           path: cache-download
+          if_no_artifact_found: warn
 
-      - name: Restore Renovate repo cache
-        if: ${{ (inputs.repoCache || 'enabled') == 'enabled' }}
+      - name: Restore cache and authenticate registries
         shell: bash
         run: |
-          set -euxo pipefail
-          if [ ! -d cache-download ]; then
-            echo "No cache found."
-            exit 0
+          set -euo pipefail
+          umask 077
+          mkdir -p /tmp/renovate/cache
+          if [ -f cache-download/cache.tar.gz.gpg ]; then
+            python3 .github/scripts/private_artifacts.py unpack \
+              --source cache-download/cache.tar.gz.gpg --destination /tmp/renovate/cache \
+              || echo "Encrypted cache unavailable; starting with a cold cache."
           fi
-          mkdir -p "${cache_dir}"
-          tar -xzf "cache-download/${cache_archive}" -C "${cache_dir}" || true
-          sudo chown -R 12021:0 /tmp/renovate/ || true
+          sudo chown -R 12021:0 /tmp/renovate/cache
+          if [ -n "${DOCKERHUB_USERNAME:-}" ] || [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+            test -n "${DOCKERHUB_USERNAME:-}" && test -n "${DOCKERHUB_TOKEN:-}"
+            printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin >/dev/null 2>&1
+          fi
+          if [ -n "${GHCR_USERNAME:-}" ] || [ -n "${GHCR_TOKEN:-}" ]; then
+            test -n "${GHCR_USERNAME:-}" && test -n "${GHCR_TOKEN:-}"
+            printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin >/dev/null 2>&1
+          fi
 
-      - name: Self-hosted Renovate (attempt 1 of 2)
-        id: renovate_primary
-        continue-on-error: true
-        uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
-        with:
-          configurationFile: .github/renovate-config.js
-          token: ${{ secrets.RENOVATE_TOKEN }}
-          # renovate: datasource=docker depName=renovate/renovate
-          renovate-version: 44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81
-          env-regex: "^(?:RENOVATE_\\w+|DOCKERHUB_\\w+|GHCR_\\w+|LOG_LEVEL)$"
-        env:
-          LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
-          RENOVATE_CACHE_DIR: /tmp/renovate/cache
-          RENOVATE_REPOSITORY_CACHE: ${{ inputs.repoCache || 'enabled' }}
-          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
-          RENOVATE_AUTODISCOVER: ${{ env.RENOVATE_AUTODISCOVER }}
-          RENOVATE_REPOSITORIES: ${{ steps.adopters.outputs.repositories }}
-          RENOVATE_CONFIG_PRESET: ${{ env.RENOVATE_CONFIG_PRESET }}
-          RENOVATE_DRY_RUN: ${{ env.RENOVATE_DRY_RUN }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      - name: Run authenticated Renovate with bounded recovery
+        run: python3 .github/scripts/run_renovate.py
 
-      - name: Bounded retry delay
-        if: steps.renovate_primary.outcome == 'failure'
-        run: sleep 30
-
-      - name: Self-hosted Renovate (attempt 2 of 2)
-        if: steps.renovate_primary.outcome == 'failure'
-        uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
-        with:
-          configurationFile: .github/renovate-config.js
-          token: ${{ secrets.RENOVATE_TOKEN }}
-          # renovate: datasource=docker depName=renovate/renovate
-          renovate-version: 44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81
-          env-regex: "^(?:RENOVATE_\\w+|DOCKERHUB_\\w+|GHCR_\\w+|LOG_LEVEL)$"
-        env:
-          LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
-          RENOVATE_CACHE_DIR: /tmp/renovate/cache
-          RENOVATE_REPOSITORY_CACHE: ${{ inputs.repoCache || 'enabled' }}
-          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
-          RENOVATE_AUTODISCOVER: ${{ env.RENOVATE_AUTODISCOVER }}
-          RENOVATE_REPOSITORIES: ${{ steps.adopters.outputs.repositories }}
-          RENOVATE_CONFIG_PRESET: ${{ env.RENOVATE_CONFIG_PRESET }}
-          RENOVATE_DRY_RUN: ${{ env.RENOVATE_DRY_RUN }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-
-      - name: Compress Renovate repo cache
-        if: ${{ (inputs.repoCache || 'enabled') != 'disabled' }}
+      - name: Encrypt cache and private diagnostics
+        if: always()
         shell: bash
         run: |
-          set -euxo pipefail
-          if [ -d "${cache_dir}" ]; then
-            tar -czf "${cache_archive}" -C "${cache_dir}" .
-          else
-            echo "Repo cache dir not found; skipping."
-            exit 0
+          set -euo pipefail
+          umask 077
+          mkdir -p encrypted "$RUNNER_TEMP/dependency-private"
+          if [ -f dependency-automation-adopters.json ]; then
+            cp dependency-automation-adopters.json "$RUNNER_TEMP/dependency-private/"
           fi
+          if [ -d /tmp/renovate/cache ] && [ "${RENOVATE_REPOSITORY_CACHE}" != "disabled" ]; then
+            sudo chown -R "$(id -u):$(id -g)" /tmp/renovate/cache
+            python3 .github/scripts/private_artifacts.py pack --source /tmp/renovate/cache --destination encrypted/cache.tar.gz.gpg
+          fi
+          python3 .github/scripts/private_artifacts.py pack --source "$RUNNER_TEMP/dependency-private" --destination encrypted/diagnostics.tar.gz.gpg
 
-      - name: Upload Renovate repo cache artifact
-        if: ${{ (inputs.repoCache || 'enabled') != 'disabled' }}
+      - name: Preserve encrypted cache
+        if: always() && hashFiles('encrypted/cache.tar.gz.gpg') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ env.cache_key }}
-          path: ${{ env.cache_archive }}
+          name: renovate-cache-encrypted
+          path: encrypted/cache.tar.gz.gpg
           retention-days: 7
 
-      - name: Upload dependency-automation adoption receipt
-        if: always()
+      - name: Preserve encrypted diagnostics
+        if: always() && hashFiles('encrypted/diagnostics.tar.gz.gpg') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: dependency-automation-adopters
-          path: dependency-automation-adopters.json
-          if-no-files-found: error
-          retention-days: 14
+          name: renovate-diagnostics-encrypted
+          path: encrypted/diagnostics.tar.gz.gpg
+          retention-days: 7
 
       - name: Trigger centralized automerge follow-up
         if: ${{ success() && (inputs.dryRun == null || inputs.dryRun == 'off') }}
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
-          EXPECTED_AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-
-          current_authority_sha="$(
-            gh api "repos/FutureDevGuys/.github/commits/main" --jq '.sha'
-          )"
-          if [ "${current_authority_sha}" != "${EXPECTED_AUTHORITY_SHA}" ]; then
-            echo "ERROR: dependency-automation authority advanced during Renovate; refusing a stale follow-up dispatch." >&2
-            exit 1
-          fi
-
-          gh workflow run automerge.yml \
-            --repo FutureDevGuys/.github \
-            --ref main
+          current_authority_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          test "$current_authority_sha" = "$GITHUB_SHA"
+          gh workflow run automerge.yml --repo "$GITHUB_REPOSITORY" --ref main -f "allowRecovery=${ALLOW_RECOVERY}"
+        env:
+          ALLOW_RECOVERY: ${{ !inputs.recovery }}

@@ -3,9 +3,7 @@
 ## Authority and scope
 
 This repository owns shared GitHub dependency automation and reusable security
-workflows for the `FutureDevGuys` organization. Repository-local dependency
-automation files are markers only; shared policy and executable behavior SHALL
-remain here.
+workflows for the `FutureDevGuys` organization. Repository-local workflow callers are markers only. The shared default and runner live here; repository-specific dependency policy and native post-upgrade tasks belong in each repository's Renovate configuration. Do not add workload paths, package exceptions, repository-name lists, or owner-script hashes to the central runtime.
 
 Renovate and automerge are the only custom workflows that MAY have automatic
 triggers. Both SHALL retain a schedule and `workflow_dispatch`. Security and
@@ -35,11 +33,9 @@ callers SHALL NOT receive write permissions or duplicate event logic.
 
 Renovate SHALL create and label candidates but SHALL NOT merge. The automerge
 sweep SHALL retain exact repository, author, commit, head, base, check/status,
-central-authority, and merge-postcondition gates. Major, database, stateful,
-migration-bearing, manually held, or contract-failing changes SHALL remain
-ineligible for automatic merge. The central risk-path policy SHALL hold known
-persistent workload roots independently of Renovate labels; repository callers
-SHALL NOT duplicate that classification.
+central-authority, and merge-postcondition gates. Major upgrades and replacements require Dependency Dashboard approval before PR creation by default. Once approved, they use the same checked merge path. Repositories declare any additional migration or workload approval requirements locally. Explicit do-not-merge holds and failing contracts are never bypassed. A current-head approval from a maintainer may release a manual review hold; stale approvals cannot authorize a changed head.
+
+Only aggregate outcome counts may be public artifacts. Private repository evidence, complete Renovate lookup caches, and detailed logs must be encrypted before upload. Cache encryption uses the existing automation credential through standard input; never print it or pass it in command arguments. Signing keys remain in Actions secrets, and their public halves are registered only for commit signing.
 
 ## State and verification
 

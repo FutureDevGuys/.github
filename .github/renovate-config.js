@@ -26,21 +26,20 @@ const autodiscoverFilter = parseList(
   process.env.RENOVATE_AUTODISCOVER_FILTER || 'FutureDevGuys/*',
 );
 const preset = process.env.RENOVATE_CONFIG_PRESET || '';
-const exactPresetPattern = /^github>FutureDevGuys\/\.github:renovate-config#[0-9a-f]{40}$/;
-const artifactLockRendererSha256 = 'b8ef3705ee68b7cfd2c769a05c8faece65fd996fb2f81ee6edfc175a63cc4fc6';
-const dockerArtifactLockCommand = `python3 -I -c "import hashlib,os,pathlib,runpy,sys; p='scripts/artifact_lock.py'; e='${artifactLockRendererSha256}'; a=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest(); a==e or sys.exit(f'artifact_lock.py digest {a} != policy {e}'); os.environ.clear(); os.environ.update(HOME='/nonexistent',PATH='/usr/bin:/bin',LANG='C.UTF-8',LC_ALL='C.UTF-8'); sys.argv=[p,'render']; runpy.run_path(p,run_name='__main__')"`;
+const exactPresetPattern = /^github>[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+:renovate-config#[0-9a-f]{40}$/;
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const repositoriesWithDisabledCustomCi = [
-  'FutureDevGuys/docker-configs',
-  'FutureDevGuys/homelab-iac',
-  'FutureDevGuys/personal-containers',
-  'FutureDevGuys/shellrc.d',
-  'FutureDevGuys/syscfg',
-];
+// Optional repo-owned hooks must verify an exact source hash before execution.
+// The command form is fixed; only a relative Python path, SHA-256 and one argument vary.
+const hookCommand = `python3 -I -c "import hashlib,os,pathlib,runpy,sys; p='HOOK_PATH'; e='HOOK_SHA256'; a=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest(); a==e or sys.exit('post-upgrade script hash mismatch'); os.environ.clear(); os.environ.update(HOME='/nonexistent',PATH='/usr/bin:/bin',LANG='C.UTF-8',LC_ALL='C.UTF-8'); sys.argv=[p,'HOOK_ARGUMENT']; runpy.run_path(p,run_name='__main__')"`;
+const hookPattern = '^' + escapeRegExp(hookCommand)
+  .replace('HOOK_PATH', '(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.py')
+  .replace('HOOK_SHA256', '[a-f0-9]{64}')
+  .replace('HOOK_ARGUMENT', '[A-Za-z0-9_-]+') + '$';
+const githubToken = process.env.GITHUB_COM_TOKEN || process.env.RENOVATE_TOKEN;
 
 if (!exactPresetPattern.test(preset)) {
   throw new Error(
-    'RENOVATE_CONFIG_PRESET must pin github>FutureDevGuys/.github:renovate-config to an exact 40-character commit SHA',
+    'RENOVATE_CONFIG_PRESET must pin the shared renovate-config preset to an exact 40-character commit SHA',
   );
 }
 
@@ -56,38 +55,18 @@ const config = {
     automerge: false,
     platformAutomerge: false,
   },
-  allowedCommands: [
-    `^${escapeRegExp(dockerArtifactLockCommand)}$`,
-  ],
+  allowedCommands: [hookPattern],
   allowShellExecutorForPostUpgradeCommands: false,
-  packageRules: [
-    {
-      description: 'Require root Go and Cargo dependency updates to pass the root bundle contracts before merge.',
-      matchRepositories: ['FutureDevGuys/personal-containers'],
-      matchManagers: ['gomod', 'cargo'],
-      addLabels: ['manual-review'],
-    },
-    {
-      description: 'Do not update GitHub Actions in repositories whose custom CI is intentionally disabled.',
-      matchRepositories: repositoriesWithDisabledCustomCi,
-      matchManagers: ['github-actions'],
-      enabled: false,
-    },
-    {
-      description: 'Regenerate the Docker owner artifact lock with a policy-pinned, credential-stripped renderer.',
-      matchRepositories: ['FutureDevGuys/docker-configs'],
-      postUpgradeTasks: {
-        commands: [dockerArtifactLockCommand],
-        fileFilters: ['contracts/artifact-lock.v2.json'],
-        executionMode: 'branch',
-      },
-    },
-  ],
-  gitAuthor: 'Renovate Bot <bot@lablabland.com>',
+  ...(process.env.RENOVATE_GIT_AUTHOR ? {gitAuthor: process.env.RENOVATE_GIT_AUTHOR} : {}),
+  ...(process.env.RENOVATE_GIT_PRIVATE_KEY ? {gitPrivateKey: process.env.RENOVATE_GIT_PRIVATE_KEY} : {}),
+  ...(process.env.RENOVATE_GIT_IGNORED_AUTHORS ? {gitIgnoredAuthors: JSON.parse(process.env.RENOVATE_GIT_IGNORED_AUTHORS)} : {}),
   timezone: process.env.RENOVATE_TIMEZONE || 'America/Phoenix',
   cacheDir: process.env.RENOVATE_CACHE_DIR || '/tmp/renovate/cache',
   repositoryCache: process.env.RENOVATE_REPOSITORY_CACHE || 'enabled',
-  hostRules: dockerHostRules,
+  hostRules: [
+    ...dockerHostRules,
+    ...(githubToken ? [{hostType: 'github', matchHost: 'api.github.com', token: githubToken, concurrentRequestLimit: 4}] : []),
+  ],
 };
 
 if (repositories.length > 0) {

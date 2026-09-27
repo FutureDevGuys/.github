@@ -320,7 +320,10 @@ def build_effective_policy(base_policy: Any, receipt: dict[str, Any]) -> dict[st
     effective = dict(base_policy)
     effective["repositories"] = {}
     for row in receipt["repositories"]:
-        existing = configured.get(row["repository"], {})
+        matches = [value for value in configured.values() if isinstance(value, dict) and value.get("repository_id") == row["repository_id"]]
+        if len(matches) > 1:
+            raise ContractError(f"{row['repository']}: duplicate immutable repository assertions")
+        existing = configured.get(row["repository"], matches[0] if matches else {})
         if not isinstance(existing, dict):
             raise ContractError(f"{row['repository']}: configured policy must be an object")
         if existing and (
@@ -337,6 +340,7 @@ def build_effective_policy(base_policy: Any, receipt: dict[str, Any]) -> dict[st
             "repository_id": row["repository_id"],
             "head_repository_id": row["head_repository_id"],
             "required_checks": required_checks,
+            "default_branch": row["default_branch"],
         }
     return effective
 

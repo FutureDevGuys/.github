@@ -124,10 +124,10 @@ def evaluate_refresh_candidate(
             head_sha=head_sha,
         )
 
-    if pull_request.get("baseRefName") != "main":
+    if pull_request.get("baseRefName") != repository_policy.get("default_branch", "main"):
         return blocked(
             "wrong_base",
-            "refresh is restricted to the main base branch",
+            "refresh is restricted to the repository default branch",
             head_sha=head_sha,
             base_sha=current_base_sha,
         )
@@ -204,10 +204,9 @@ def evaluate_refresh_candidate(
                 head_sha=head_sha,
                 base_sha=current_base_sha,
             )
-        if (
-            git_author.get("name") != identity.get("commit_name")
-            or git_author.get("email") != identity.get("commit_email")
-        ):
+        trusted_authors = {(identity.get("commit_name"), identity.get("commit_email"))}
+        trusted_authors.update((row.get("name"), row.get("email")) for row in identity.get("legacy_commit_authors", []))
+        if (git_author.get("name"), git_author.get("email")) not in trusted_authors:
             return blocked(
                 "untrusted_commit_identity",
                 f"commit {commit.get('sha')} author is not the Renovate identity",
@@ -221,6 +220,7 @@ def evaluate_refresh_candidate(
                 identity.get("refresh_committer_email"),
             ),
         }
+        trusted_committers.update(trusted_authors)
         if (git_committer.get("name"), git_committer.get("email")) not in trusted_committers:
             return blocked(
                 "untrusted_commit_identity",

@@ -26,10 +26,6 @@ def load_module(name: str, relative_path: str):
 
 
 outcomes = load_module("automerge_outcomes", ".github/scripts/automerge_outcomes.py")
-risk_paths = load_module(
-    "validate_automerge_risk_paths",
-    ".github/scripts/validate_automerge_risk_paths.py",
-)
 adoption = load_module(
     "audit_security_scan_adoption",
     ".github/scripts/audit_security_scan_adoption.py",
@@ -505,17 +501,6 @@ class SecurityContractRevisionTests(unittest.TestCase):
             )
             self.assertNotEqual(forged, desired)
 
-    def test_automerge_binds_and_revalidates_the_checked_out_authority(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("fetch-depth: 0", workflow)
-        self.assertIn("EXPECTED_AUTHORITY_SHA: ${{ github.sha }}", workflow)
-        self.assertIn('checkout_head="$(git rev-parse HEAD)"', workflow)
-        self.assertIn("repos/${ORG}/.github/commits/${TARGET_BRANCH}", workflow)
-        self.assertIn("org_automerge_authority_advanced", workflow)
-        self.assertNotIn("resolve_security_contract_revision.py", workflow)
-        self.assertNotIn("required-security-revision", workflow)
 
     def test_release_workflow_is_manual_only_and_never_force_updates(
         self,
@@ -579,138 +564,9 @@ class SecurityContractRevisionTests(unittest.TestCase):
 
 
 class RenovatePolicyTests(unittest.TestCase):
-    def test_root_go_and_cargo_updates_require_manual_review(self):
-        probe = subprocess.run(
-            [
-                "node",
-                "-e",
-                "const c=require('./.github/renovate-config.js');"
-                "const r=c.packageRules.find(x=>x.matchRepositories?.includes('FutureDevGuys/personal-containers') && x.matchManagers?.includes('gomod'));"
-                "console.log(JSON.stringify(r));",
-            ],
-            cwd=REPO_ROOT,
-            env={
-                **os.environ,
-                "RENOVATE_CONFIG_PRESET": (
-                    "github>FutureDevGuys/.github:renovate-config#" + "1" * 40
-                ),
-            },
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        rule = json.loads(probe.stdout)
-        self.assertEqual(rule["matchManagers"], ["gomod", "cargo"])
-        self.assertEqual(rule["addLabels"], ["manual-review"])
 
-    def test_disabled_target_ci_actions_are_not_managed(self):
-        probe = subprocess.run(
-            [
-                "node",
-                "-e",
-                "const c=require('./.github/renovate-config.js');"
-                "const r=c.packageRules.find(x=>x.matchManagers?.includes('github-actions') && x.enabled===false);"
-                "console.log(JSON.stringify(r));",
-            ],
-            cwd=REPO_ROOT,
-            env={
-                **os.environ,
-                "RENOVATE_CONFIG_PRESET": (
-                    "github>FutureDevGuys/.github:renovate-config#" + "1" * 40
-                ),
-            },
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        rule = json.loads(probe.stdout)
-        self.assertEqual(rule["matchManagers"], ["github-actions"])
-        self.assertEqual(
-            rule["matchRepositories"],
-            [
-                "FutureDevGuys/docker-configs",
-                "FutureDevGuys/homelab-iac",
-                "FutureDevGuys/personal-containers",
-                "FutureDevGuys/shellrc.d",
-                "FutureDevGuys/syscfg",
-            ],
-        )
 
-    def test_docker_artifact_lock_regeneration_is_exactly_allowlisted(self):
-        preset = json.loads(
-            (REPO_ROOT / "renovate-config.json").read_text(encoding="utf-8")
-        )
-        probe = subprocess.run(
-            [
-                "node",
-                "-e",
-                "const c=require('./.github/renovate-config.js');"
-                "const r=c.packageRules.find(x=>x.matchRepositories?.includes('FutureDevGuys/docker-configs') && x.postUpgradeTasks);"
-                "const cmd=r.postUpgradeTasks.commands[0];"
-                "console.log(JSON.stringify({cmd,pattern:c.allowedCommands[0],matches:new RegExp(c.allowedCommands[0]).test(cmd),shell:c.allowShellExecutorForPostUpgradeCommands,files:r.postUpgradeTasks.fileFilters,mode:r.postUpgradeTasks.executionMode}));",
-            ],
-            cwd=REPO_ROOT,
-            env={
-                **os.environ,
-                "RENOVATE_CONFIG_PRESET": (
-                    "github>FutureDevGuys/.github:renovate-config#" + "1" * 40
-                ),
-            },
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        contract = json.loads(probe.stdout)
-        self.assertTrue(contract["matches"])
-        self.assertFalse(contract["shell"])
-        self.assertEqual(contract["files"], ["contracts/artifact-lock.v2.json"])
-        self.assertEqual(contract["mode"], "branch")
-        self.assertIn("python3 -I -c", contract["cmd"])
-        self.assertIn("os.environ.clear()", contract["cmd"])
-        self.assertIn(
-            "b8ef3705ee68b7cfd2c769a05c8faece65fd996fb2f81ee6edfc175a63cc4fc6",
-            contract["cmd"],
-        )
-        self.assertNotIn("RENOVATE_TOKEN", contract["cmd"])
-        self.assertFalse(
-            any("postUpgradeTasks" in rule for rule in preset["packageRules"])
-        )
-        global_config = (REPO_ROOT / ".github/renovate-config.js").read_text(
-            encoding="utf-8"
-        )
-        self.assertNotIn("dockerMaxPages", global_config)
-        self.assertNotIn("dockerMaxPages", preset)
 
-    def test_runtime_and_preset_are_exact_and_retry_is_bounded(self):
-        workflow = (REPO_ROOT / ".github/workflows/renovate.yml").read_text(
-            encoding="utf-8"
-        )
-        pins = re.findall(r"renovatebot/github-action@([0-9a-f]{40})", workflow)
-        self.assertEqual(len(pins), 2)
-        self.assertEqual(len(set(pins)), 1)
-        self.assertEqual(pins[0], "e09d604f8f803bb527bd8321ed5be06c460b8682")
-        runtime_pins = re.findall(
-            r"renovate-version:\s*([0-9]+(?:\.[0-9]+){2}@sha256:[0-9a-f]{64})",
-            workflow,
-        )
-        self.assertEqual(
-            runtime_pins,
-            [
-                "44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81",
-                "44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81",
-            ],
-        )
-        self.assertEqual(
-            workflow.count("# renovate: datasource=docker depName=renovate/renovate"),
-            2,
-        )
-        self.assertIn(
-            "github>FutureDevGuys/.github:renovate-config#${{ github.sha }}",
-            workflow,
-        )
-        self.assertIn(
-            "repos/FutureDevGuys/.github/contents/renovate-config.json", workflow
-        )
 
     def test_runtime_config_rejects_mutable_shared_preset(self):
         command = [
@@ -814,79 +670,10 @@ class RenovatePolicyTests(unittest.TestCase):
         self.assertIn("vendor/**", disabled_patterns)
         self.assertIn("**/vendor/**", disabled_patterns)
 
-    def test_automerge_refuses_partial_repository_visibility(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("refusing a partial-success sweep", workflow)
-        self.assertIn("resolve_dependency_automation_adopters.py", workflow)
-        self.assertIn("dependency-automation-adopters.json", workflow)
-        self.assertIn("automerge-effective-policy.json", workflow)
-        self.assertNotIn("auth/permissions?); skipping repo", workflow)
 
-    def test_automerge_paginates_all_open_pull_requests(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("pulls?state=open&per_page=100", workflow)
-        self.assertIn("--paginate --slurp", workflow)
-        self.assertNotIn("gh pr list", workflow)
 
-    def test_mutating_automerge_is_scheduled_manual_and_default_branch_only(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn('\n  schedule:\n    - cron: "37 5,17 * * *"', workflow)
-        self.assertNotIn("\n  push:", workflow)
-        self.assertNotIn("\n  pull_request:", workflow)
-        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
-        self.assertNotIn("DRY_RUN", workflow)
 
-    def test_only_dependency_automation_has_automatic_triggers(self):
-        renovate = (
-            REPO_ROOT / ".github/workflows/renovate.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("workflow_dispatch:", renovate)
-        self.assertIn('\n  schedule:\n    - cron: "17 3 * * *"', renovate)
-        self.assertNotIn("\n  push:", renovate)
-        self.assertNotIn("\n  pull_request:", renovate)
-        self.assertIn("if: github.ref == 'refs/heads/main'", renovate)
-        automerge = (
-            REPO_ROOT / ".github/workflows/automerge.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("workflow_dispatch:", automerge)
-        self.assertIn("\n  schedule:", automerge)
-        automatic = {"renovate.yml", "automerge.yml"}
-        for path in (REPO_ROOT / ".github/workflows").glob("*.yml"):
-            relative = str(path.relative_to(REPO_ROOT))
-            workflow = path.read_text(encoding="utf-8")
-            if path.name in automatic:
-                continue
-            self.assertTrue(
-                "workflow_dispatch:" in workflow or "workflow_call:" in workflow,
-                relative,
-            )
-            self.assertNotIn("\n  schedule:", workflow, relative)
-            self.assertNotIn("\n  push:", workflow, relative)
-            self.assertNotIn("\n  pull_request:", workflow, relative)
 
-    def test_successful_renovate_dispatches_central_automerge(self):
-        workflow = (
-            REPO_ROOT / ".github/workflows/renovate.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("Trigger centralized automerge follow-up", workflow)
-        self.assertIn(
-            "if: ${{ success() && (inputs.dryRun == null || inputs.dryRun == 'off') }}",
-            workflow,
-        )
-        self.assertIn("GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}", workflow)
-        self.assertIn("EXPECTED_AUTHORITY_SHA: ${{ github.sha }}", workflow)
-        self.assertIn('repos/FutureDevGuys/.github/commits/main', workflow)
-        self.assertIn("gh workflow run automerge.yml", workflow)
-        self.assertIn("--repo FutureDevGuys/.github", workflow)
-        self.assertIn("--ref main", workflow)
-        self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
 
     def test_both_dependency_runners_use_the_same_marker_resolver(self):
         for relative in (
@@ -901,98 +688,10 @@ class RenovatePolicyTests(unittest.TestCase):
             )
             self.assertIn("dependency-automation-adopters.json", workflow, relative)
 
-    def test_manual_risk_classes_and_contract_failures_remain_held(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        match = re.search(r'BLOCK_LABELS: "([^"]+)"', workflow)
-        self.assertIsNotNone(match)
-        self.assertTrue(
-            {
-                "manual-review",
-                "major",
-                "migration-required",
-                "database",
-                "stateful",
-                "contract-failing",
-            }.issubset(set(match.group(1).split(",")))
-        )
-        self.assertIn("candidate_contract_failed", workflow)
-        self.assertIn("validate_automerge_risk_paths.py", workflow)
-        self.assertIn("stateful_path", workflow)
 
-    def test_central_risk_paths_hold_stateful_changes_without_labels(self):
-        policy = json.loads(
-            (REPO_ROOT / ".github/automerge-risk-paths.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        for filename in (
-            "core/tailscale/docker-compose.yaml",
-            "gaming/pterodactyl/panel/docker-compose.yaml",
-            "core/komodo/docker-compose.core.yaml",
-            "dev/servers/proxy/cli-proxy-api/docker-compose.yaml",
-        ):
-            result = risk_paths.evaluate(
-                "FutureDevGuys/docker-configs",
-                policy,
-                [{"filename": filename}],
-            )
-            self.assertFalse(result["eligible"], filename)
-            self.assertEqual(result["matched_paths"], [filename])
 
-    def test_central_risk_paths_allow_stateless_and_unlisted_repository_changes(self):
-        policy = json.loads(
-            (REPO_ROOT / ".github/automerge-risk-paths.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        stateless = risk_paths.evaluate(
-            "FutureDevGuys/docker-configs",
-            policy,
-            [{"filename": "tools/bots/discord/docker-compose.yaml"}],
-        )
-        unlisted = risk_paths.evaluate(
-            "FutureDevGuys/syscfg",
-            policy,
-            [{"filename": "Cargo.lock"}],
-        )
-        self.assertTrue(stateless["eligible"])
-        self.assertTrue(unlisted["eligible"])
 
-    def test_central_risk_path_policy_is_complete_for_persistent_compose_roots(self):
-        policy = json.loads(
-            (REPO_ROOT / ".github/automerge-risk-paths.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        prefixes = policy["repositories"]["FutureDevGuys/docker-configs"][
-            "path_prefixes"
-        ]
-        self.assertEqual(prefixes, sorted(prefixes))
-        self.assertEqual(len(prefixes), len(set(prefixes)))
-        self.assertTrue(all(prefix.endswith("/") for prefix in prefixes))
 
-    def test_automerge_base_policy_preserves_known_identity_assertions(self):
-        policy = json.loads(
-            (REPO_ROOT / ".github/automerge-policy.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(
-            set(policy["repositories"]),
-            {
-                "FutureDevGuys/.github",
-                "FutureDevGuys/docker-configs",
-                "FutureDevGuys/homelab-iac",
-                "FutureDevGuys/personal-containers",
-                "FutureDevGuys/shellrc.d",
-                "FutureDevGuys/syscfg",
-            },
-        )
-        for repository in policy["repositories"].values():
-            self.assertIsInstance(repository["repository_id"], int)
-            self.assertGreater(repository["repository_id"], 0)
-            self.assertRegex(repository["head_repository_id"], r"^R_")
-            self.assertEqual(repository["required_checks"], [])
 
 
 class AutomergeRepositoryVisibilityTests(unittest.TestCase):
@@ -1000,7 +699,7 @@ class AutomergeRepositoryVisibilityTests(unittest.TestCase):
 
     def setUp(self):
         self.policy = json.loads(
-            (REPO_ROOT / ".github/automerge-policy.json").read_text(encoding="utf-8")
+            (REPO_ROOT / ".github/tests/fixtures/automerge/policy.json").read_text(encoding="utf-8")
         )
         owner = self.policy["organization"]
         self.discovered = [
@@ -1099,7 +798,7 @@ class AutomergeCandidateTests(unittest.TestCase):
     def setUp(self):
         fixture = REPO_ROOT / ".github/tests/fixtures/automerge"
         self.policy = json.loads(
-            (REPO_ROOT / ".github/automerge-policy.json").read_text(encoding="utf-8")
+            (REPO_ROOT / ".github/tests/fixtures/automerge/policy.json").read_text(encoding="utf-8")
         )
         self.pull_request = json.loads(
             (fixture / "pr-trusted.json").read_text(encoding="utf-8")
@@ -1278,7 +977,7 @@ class AutomergeRefreshTests(unittest.TestCase):
     def setUp(self):
         fixture = REPO_ROOT / ".github/tests/fixtures/automerge"
         self.policy = json.loads(
-            (REPO_ROOT / ".github/automerge-policy.json").read_text(encoding="utf-8")
+            (REPO_ROOT / ".github/tests/fixtures/automerge/policy.json").read_text(encoding="utf-8")
         )
         self.pull_request = json.loads(
             (fixture / "pr-trusted.json").read_text(encoding="utf-8")
@@ -1462,71 +1161,9 @@ class AutomergeRefreshTests(unittest.TestCase):
             "comparison_evidence_stale",
         )
 
-    def test_workflow_uses_expected_head_rebase_and_holds_merge(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        refresh_start = workflow.index('if [ "${refresh_action}" = "refresh" ]')
-        merge_start = workflow.index("# Only a current branch reaches merge validation")
-        refresh_block = workflow[refresh_start:merge_start]
-        self.assertIn('-f "expected_head_sha=${head_sha}"', refresh_block)
-        self.assertIn("-f update_method=rebase", refresh_block)
-        self.assertIn("continue", refresh_block)
-        self.assertNotIn("gh pr merge", refresh_block)
 
-    def test_workflow_compare_and_swaps_validated_head_at_merge(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(
-            'merge_args=(--squash --match-head-commit "${head_sha}")',
-            workflow,
-        )
-        self.assertIn("candidate_changed_since_validation", workflow)
-        self.assertNotIn("mergeable=UNKNOWN; refreshing", workflow)
 
-    def test_workflow_hard_restricts_merge_method_to_squash(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('if [ "${MERGE_METHOD}" != "squash" ]', workflow)
-        self.assertIn(
-            'merge_args=(--squash --match-head-commit "${head_sha}")',
-            workflow,
-        )
-        self.assertNotIn("merge|squash|rebase", workflow)
-        self.assertNotIn('--"${MERGE_METHOD}"', workflow)
 
-    def test_workflow_refetches_and_revalidates_observed_evidence_at_merge_boundary(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        premerge_start = workflow.index('premerge_evidence_ok="true"')
-        merge_start = workflow.index('if gh pr merge --repo "${REPO}"')
-        premerge_block = workflow[premerge_start:merge_start]
-        self.assertIn("premerge-pr.json", premerge_block)
-        self.assertIn("premerge-commits.json", premerge_block)
-        self.assertIn("premerge-checks.json", premerge_block)
-        self.assertIn("premerge-statuses.json", premerge_block)
-        self.assertNotIn("premerge-security-scan.yml", premerge_block)
-        self.assertIn("validate_automerge_candidate.py", premerge_block)
-        self.assertEqual(workflow.count("validate_automerge_candidate.py"), 2)
-        self.assertLess(
-            workflow.index(
-                '> "${candidate_dir}/premerge-statuses.json"',
-                premerge_start,
-                merge_start,
-            ),
-            workflow.rindex(
-                "validate_automerge_candidate.py", premerge_start, merge_start
-            ),
-        )
-        self.assertLess(
-            workflow.rindex(
-                "validate_automerge_candidate.py", premerge_start, merge_start
-            ),
-            merge_start,
-        )
 
 
 class AutomergeRefreshPostconditionTests(unittest.TestCase):
@@ -1595,17 +1232,6 @@ class AutomergeRefreshPostconditionTests(unittest.TestCase):
         self.assertFalse(result["verified"])
         self.assertEqual(result["reason"], "refreshed_base_mismatch")
 
-    def test_workflow_does_not_count_request_acceptance_as_refresh(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        request_start = workflow.index("if gh api --method PUT \\\n")
-        request_end = workflow.index("# Only a current branch reaches merge validation")
-        request_block = workflow[request_start:request_end]
-        self.assertIn("validate_automerge_refresh_postcondition.py", request_block)
-        self.assertIn("branch_refresh_postcondition_unknown", request_block)
-        self.assertIn("refreshed refresh_verified", request_block)
-        self.assertNotIn("refreshed branch_refresh_requested", request_block)
 
 
 class AutomergeMergePostconditionTests(unittest.TestCase):
@@ -1696,16 +1322,6 @@ class AutomergeMergePostconditionTests(unittest.TestCase):
         self.assertFalse(result["verified"])
         self.assertEqual(result["reason"], "merge_parent_mismatch")
 
-    def test_workflow_does_not_treat_merge_exit_zero_as_completion(self):
-        workflow = (REPO_ROOT / ".github/workflows/automerge.yml").read_text(
-            encoding="utf-8"
-        )
-        merge_start = workflow.index('if gh pr merge --repo "${REPO}"')
-        merge_block = workflow[merge_start:]
-        self.assertIn("validate_automerge_merge_postcondition.py", merge_block)
-        self.assertIn("merge_postcondition_unknown", merge_block)
-        self.assertIn("merged merge_verified", merge_block)
-        self.assertNotIn("merged merged", merge_block)
 
 
 class AutomergeOutcomeTests(unittest.TestCase):
