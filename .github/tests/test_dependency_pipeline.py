@@ -300,6 +300,8 @@ class GenericPolicyTests(unittest.TestCase):
         self.assertNotIn('inputs.allowRecovery == null', merge)
         self.assertIn("github.event_name == 'schedule' || inputs.allowRecovery", merge)
         self.assertIn('-f recovery=true', merge)
+        self.assertIn('Retain only two encrypted cache snapshots', renovate)
+        self.assertIn('reverse | .[2:][] | .id', renovate)
         for text in (renovate, merge):
             self.assertNotIn('path: automerge-candidates/', text)
             self.assertNotIn('path: dependency-automation-adopters.json', text)
