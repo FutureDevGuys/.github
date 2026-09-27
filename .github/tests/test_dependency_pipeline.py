@@ -134,6 +134,7 @@ class MergePipelineTests(unittest.TestCase):
         self.assertEqual(self.sweep.records[-1]["reason"], "check_not_successful")
 
     def test_unsigned_legacy_branch_requests_only_one_signed_rebuild(self):
+        self.api.pr["mergeable_state"] = "blocked"
         self.api.commits[0]["commit"]["verification"]["verified"] = False
         self.run_candidate()
         self.run_candidate()
@@ -143,11 +144,18 @@ class MergePipelineTests(unittest.TestCase):
 
     def test_manual_hold_is_rebuilt_before_requiring_current_head_approval(self):
         self.api.pr["labels"].append({"name": "manual-review"})
+        self.api.pr["mergeable_state"] = "blocked"
         self.api.commits[0]["commit"]["verification"]["verified"] = False
         self.run_candidate()
         self.assertEqual(self.sweep.records[-1]["reason"], "signed_rebuild_required")
         self.assertEqual(self.sweep.recovery, {self.api.repository})
         self.assertFalse(self.api.pr["merged"])
+
+    def test_unsigned_native_rebase_is_not_a_global_merge_blocker(self):
+        self.api.commits[0]["commit"]["verification"]["verified"] = False
+        self.run_candidate()
+        self.assertTrue(self.api.pr["merged"])
+        self.assertEqual(self.sweep.records[-1]["reason"], "merge_verified")
 
     def test_refreshed_candidate_is_revalidated_and_merged_in_same_sweep(self):
         self.api.behind = True

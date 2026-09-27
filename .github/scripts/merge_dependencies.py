@@ -172,8 +172,12 @@ class Sweep:
                 else:
                     self.record(repository, number, "blocked", refresh["reason"])
                 return
-            # Unsigned legacy commits are rebuilt by Renovate using its configured signing key.
-            if any(not commit.get("commit", {}).get("verification", {}).get("verified") for commit in commits):
+            # Signing is a repository protection requirement, not a new global gate.
+            # GitHub's native rebase can invalidate a signature on private repos
+            # without signature protection; their normal identity/check gates still apply.
+            if pr.get("mergeable_state") == "blocked" and any(
+                not commit.get("commit", {}).get("verification", {}).get("verified") for commit in commits
+            ):
                 self.request_rebuild(repository, pr, "signed_rebuild_required")
                 return
             if refresh["action"] == "refresh":
