@@ -76,7 +76,7 @@ jobs:
           retention-days: 7
 
       - name: Request one targeted Renovate recovery
-        if: ${{ !cancelled() && (inputs.allowRecovery == null || inputs.allowRecovery) }}
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.allowRecovery) }}
         shell: bash
         run: |
           set -euo pipefail
