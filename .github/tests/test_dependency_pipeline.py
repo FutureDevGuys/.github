@@ -292,6 +292,13 @@ class GenericPolicyTests(unittest.TestCase):
         self.assertFalse(major.get("dependencyDashboardApproval", False))
         self.assertIn("manual-review", major["addLabels"])
 
+    def test_review_backlog_does_not_block_new_routine_updates(self):
+        preset = json.loads((ROOT / "renovate-config.json").read_text())
+        self.assertEqual(preset["prConcurrentLimit"], 0)
+        self.assertEqual(preset["branchConcurrentLimit"], 0)
+        self.assertGreater(preset["prHourlyLimit"], 0)
+        self.assertLessEqual(preset["prHourlyLimit"], 3)
+
     def test_existing_assertions_follow_repository_id_through_rename(self):
         base = json.loads((ROOT / ".github/tests/fixtures/automerge/policy.json").read_text())
         item = base["repositories"]["FutureDevGuys/docker-configs"]

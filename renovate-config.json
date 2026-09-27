@@ -18,7 +18,7 @@
     "vendor/**",
     "**/vendor/**"
   ],
-  "prConcurrentLimit": 5,
+  "prConcurrentLimit": 0,
   "prHourlyLimit": 3,
   "customManagers": [
     {
@@ -164,5 +164,6 @@
       "minimumReleaseAge": null,
       "internalChecksFilter": "strict"
     }
-  ]
+  ],
+  "branchConcurrentLimit": 0
 }
