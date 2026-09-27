@@ -221,6 +221,9 @@ class Sweep:
             current_base = api.api(f"{prefix}/commits/{quote(default_branch, safe='')}")["sha"]
             if authorization_surface(current) != authorization_surface(pr) or current_base != base:
                 continue
+            if needs_approval and not human_approved(api, repository, current):
+                self.record(repository, number, "human", "approval_required")
+                return
             final_checks = api.api(f"{prefix}/commits/{head}/check-runs?per_page=100")
             final_statuses = api.api(f"{prefix}/commits/{head}/status?per_page=100")
             final = evaluate_candidate(repository=repository, policy=self.policy, pull_request=normalized_pr(current), commits=commits, checks=final_checks, statuses=final_statuses)
