@@ -146,6 +146,18 @@ jobs:
           path: encrypted/diagnostics.tar.gz.gpg
           retention-days: 7
 
+      - name: Retain only two encrypted cache snapshots
+        if: always() && hashFiles('encrypted/cache.tar.gz.gpg') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" --paginate --slurp \
+            | jq -r '[.[].artifacts[] | select(.name == "renovate-cache-encrypted" and .expired == false)] | sort_by(.created_at) | reverse | .[2:][] | .id' \
+            > "$RUNNER_TEMP/dependency-private/obsolete-cache-ids"
+          while read -r artifact_id; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id" >/dev/null
+          done < "$RUNNER_TEMP/dependency-private/obsolete-cache-ids"
+
       - name: Trigger centralized automerge follow-up
         if: ${{ success() && (inputs.dryRun == null || inputs.dryRun == 'off') }}
         shell: bash
