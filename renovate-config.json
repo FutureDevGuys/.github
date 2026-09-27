@@ -143,15 +143,15 @@
       "automerge": false
     },
     {
-      "description": "Require one Dependency Dashboard approval for major upgrades and package replacements; then follow the normal checked merge path.",
+      "description": "Create major upgrades and replacements for one explicit current-head maintainer merge approval.",
       "matchUpdateTypes": [
         "major",
         "replacement"
       ],
       "automerge": false,
-      "dependencyDashboardApproval": true,
       "addLabels": [
-        "automerge-candidate"
+        "automerge-candidate",
+        "manual-review"
       ],
       "minimumReleaseAge": null
     },
