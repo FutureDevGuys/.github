@@ -33,7 +33,7 @@ callers SHALL NOT receive write permissions or duplicate event logic.
 
 Renovate SHALL create and label candidates but SHALL NOT merge. The automerge
 sweep SHALL retain exact repository, author, commit, head, base, check/status,
-central-authority, and merge-postcondition gates. Major upgrades and replacements require Dependency Dashboard approval before PR creation by default. Once approved, they use the same checked merge path. Repositories declare any additional migration or workload approval requirements locally. Explicit do-not-merge holds and failing contracts are never bypassed. A current-head approval from a maintainer may release a manual review hold; stale approvals cannot authorize a changed head.
+central-authority, and merge-postcondition gates. Major upgrades and replacements require one current-head maintainer merge approval by default. Their package rules retain the manual-review label so already-open PRs cannot bypass the approval boundary. Native dashboard creation approval is not merge authorization. Repositories declare any additional migration or workload approval requirements locally. Explicit do-not-merge holds and failing contracts are never bypassed. A current-head approval from a maintainer may release a manual review hold; stale approvals cannot authorize a changed head.
 
 Only aggregate outcome counts may be public artifacts. Private repository evidence, complete Renovate lookup caches, and detailed logs must be encrypted before upload. Cache encryption uses the existing automation credential through standard input; never print it or pass it in command arguments. Signing keys remain in Actions secrets, and their public halves are registered only for commit signing.
 

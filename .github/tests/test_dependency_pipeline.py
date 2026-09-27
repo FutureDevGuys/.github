@@ -289,8 +289,8 @@ class GenericPolicyTests(unittest.TestCase):
         rules = [row for row in preset["packageRules"] if "digest" in row.get("matchUpdateTypes", []) and "automerge-candidate" in row.get("addLabels", [])]
         self.assertTrue(any("matchManagers" not in row and "matchDatasources" not in row for row in rules))
         major = next(row for row in preset["packageRules"] if "major" in row.get("matchUpdateTypes", []))
-        self.assertTrue(major["dependencyDashboardApproval"])
-        self.assertNotIn("manual-review", major["addLabels"])
+        self.assertFalse(major.get("dependencyDashboardApproval", False))
+        self.assertIn("manual-review", major["addLabels"])
 
     def test_existing_assertions_follow_repository_id_through_rename(self):
         base = json.loads((ROOT / ".github/tests/fixtures/automerge/policy.json").read_text())
