@@ -82,7 +82,7 @@ jobs:
       - name: Download previous encrypted lookup and repository cache
         if: ${{ (inputs.repoCache || 'enabled') == 'enabled' }}
         continue-on-error: true
-        uses: dawidd6/action-download-artifact@57aa996fc1713cc1579039614f4645a7f4841fd4 # v23
+        uses: dawidd6/action-download-artifact@634d83b91986fcec9be314054943fa5c976aeb0e # v25
         with:
           workflow: renovate.yml
           branch: main
