@@ -4,74 +4,7 @@
 
 ### Renovate
 
-Shared Renovate policy lives in `renovate-config.json`. The daily
-org runner uses `.github/renovate-config.js` only for self-hosted runtime
-settings such as GitHub platform config, target injection, cache, credentials, and
-`globalExtends`.
-
-Internal `FutureDevGuys` repos are picked up when their exact default commit
-contains the minimal dependency-automation marker documented in `README.md`.
-External consumers can add a local `renovate.json` containing:
-
-```json
-{
-  "extends": ["github>FutureDevGuys/.github:renovate-config"]
-}
-```
-
-Renovate itself never merges PRs; it only creates and labels them. The
-self-hosted runtime force-overrides both `automerge` and `platformAutomerge` to
-false even if repository policy drifts. The label contract consumed by the
-separate sweep is:
-
-- `automerge-candidate` allows hands-off merge after required gates.
-- `manual-review`, `major`, `migration-required`, `database`, `stateful`, and
-  `contract-failing` block the shared automerge sweep.
-- Major updates are visible manual PRs by default. Use repo-local policy only
-  for exceptions that should remain dashboard-approved before a PR exists.
-- Repo-local `renovate.json` files should add only repo-local policy deltas.
-  They may label candidates but must not enable Renovate merging or select a
-  merge type/strategy; the scheduled adoption audit enforces that boundary for
-  every repository listed in `renovate_config_repositories`.
-- Immutable `digest` and `pinDigest` updates do not inherit a release-age gate;
-  non-immutable patch and minor updates retain their semantic cooldowns.
-
-The scheduled runner pins both the GitHub Action wrapper and the Renovate image
-tag/digest. It resolves the shared preset at the exact workflow commit through
-an authenticated API preflight, and it makes at most two attempts inside the
-job timeout. The automerge sweep uploads JSONL outcome records containing each
-candidate skip reason and PR age. An aged actionable blocker with zero eligible
-or merged progress marks the run degraded; policy-blocked manual work is
-reported but does not count as an actionable blocker.
-
-The twice-daily automerge sweep uses squash merges and deletes merged Renovate branches. The
-org repositories are configured to allow squash merges only, so manual PR merges
-use the same history shape as the automation.
-
-`.github/automerge-policy.json` is the fail-closed Renovate identity and
-optional per-repository identity/check assertion contract, not an adoption
-list. The adopter resolver builds an effective policy from the exact identities
-in the current marker receipt and rejects drift for any existing assertion. A
-candidate must have that same-repository immutable ID and owner and only Renovate-authored
-commits. Every check run or commit status that exists for the current head must
-be complete and successful; repositories with intentionally disabled custom CI
-may have zero check records. Pending, skipped, failed, stale, partial, or
-ambiguous observed evidence blocks the merge. Block labels, current-base
-containment, GitHub mergeability, central-authority freshness, and exact-head
-compare-and-swap remain mandatory.
-
-The runners live only in this public `.github` repository so their runtime uses
-the central credentials and does not consume private-repository Actions minutes.
-Target repositories carry only the byte-exact manual marker. Both central
-runners resolve the same marker set at exact default-branch commits; repository
-callers contain no policy or executable dependency-management behavior.
-The runtime disables the `github-actions` manager for target repositories while
-their custom CI is intentionally disabled. This prevents inactive workflow
-files from creating dependency PR noise without weakening pin management for
-the two active workflows in this repository.
-
-The current Renovate token principal is an ordinary GitHub user, not a dedicated
-bot/App; `context/state.md` tracks that residual identity-separation risk.
+The [repository README](../README.md#renovate) owns the shared dependency-automation workflow, current scheduling, encrypted cache/diagnostics, signing, and human approval interface. Native Renovate extraction and generic classification apply to every adopter. Repositories own optional package rules and hash-verified post-upgrade tasks in their own `renovate.json`; the central runner does not maintain workload path lists or script-version inventories.
 
 ### `security-scan.yml`
 

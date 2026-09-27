@@ -10,40 +10,15 @@
     "id": "U_kgDOBdMcOQ",
     "is_bot": false,
     "commit_name": "Renovate Bot",
-    "commit_email": "bot@lablabland.com",
+    "commit_email": "97721401+DevGuyRash@users.noreply.github.com",
     "refresh_committer_name": "Dev Guy Rash",
-    "refresh_committer_email": "97721401+DevGuyRash@users.noreply.github.com"
+    "refresh_committer_email": "97721401+DevGuyRash@users.noreply.github.com",
+    "legacy_commit_authors": [
+      {
+        "name": "Renovate Bot",
+        "email": "bot@lablabland.com"
+      }
+    ]
   },
-  "repositories": {
-    "FutureDevGuys/.github": {
-      "repository_id": 1182030180,
-      "head_repository_id": "R_kgDORnRZZA",
-      "required_checks": []
-    },
-    "FutureDevGuys/docker-configs": {
-      "repository_id": 974794952,
-      "head_repository_id": "R_kgDOOhowyA",
-      "required_checks": []
-    },
-    "FutureDevGuys/homelab-iac": {
-      "repository_id": 1164509898,
-      "head_repository_id": "R_kgDORWkCyg",
-      "required_checks": []
-    },
-    "FutureDevGuys/personal-containers": {
-      "repository_id": 1069555737,
-      "head_repository_id": "R_kgDOP8AgGQ",
-      "required_checks": []
-    },
-    "FutureDevGuys/shellrc.d": {
-      "repository_id": 998285066,
-      "head_repository_id": "R_kgDOO4CfCg",
-      "required_checks": []
-    },
-    "FutureDevGuys/syscfg": {
-      "repository_id": 1198895530,
-      "head_repository_id": "R_kgDOR3Wxqg",
-      "required_checks": []
-    }
-  }
+  "repositories": {}
 }

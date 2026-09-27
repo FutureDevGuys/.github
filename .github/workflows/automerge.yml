@@ -2,705 +2,89 @@ name: Automerge
 
 on:
   schedule:
-    - cron: "37 5,17 * * *"
+    - cron: "37 * * * *"
   workflow_dispatch:
+    inputs:
+      allowRecovery:
+        description: "Allow one targeted Renovate recovery run"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
-  group: automerge
+  group: dependency-automerge
   cancel-in-progress: false
-
-env:
-  ORG: FutureDevGuys
 
 jobs:
   sweep:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+      ARTIFACT_ENCRYPTION_KEY: ${{ secrets.RENOVATE_TOKEN }}
     steps:
-      - name: Checkout outcome contract
+      - name: Checkout exact automation source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Automerge sweep
-        env:
-          GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
-
-          # Defaults (hardcoded — no callers to override)
-          TARGET_BRANCH: main
-          ALLOWED_PREFIXES: "renovate/"
-          REQUIRED_LABELS: "automerge-candidate"
-          BLOCK_LABELS: "do-not-merge,manual-review,migration-required,major,database,stateful,contract-failing"
-          MERGE_METHOD: squash
-          DELETE_BRANCH: "true"
-          AUTOMERGE_BASE_POLICY: .github/automerge-policy.json
-          AUTOMERGE_POLICY: automerge-effective-policy.json
-          AUTOMERGE_RISK_PATH_POLICY: .github/automerge-risk-paths.json
-          EXPECTED_AUTHORITY_SHA: ${{ github.sha }}
-
+      - name: Resolve exact marker adopters
         shell: bash
         run: |
           set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/dependency-private"
+          python3 .github/scripts/resolve_dependency_automation_adopters.py \
+            --organization "$GITHUB_REPOSITORY_OWNER" --output dependency-automation-adopters.json \
+            > "$RUNNER_TEMP/dependency-private/adoption.log" 2>&1
 
-          # ---- tooling checks ----
-          command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI not found on runner"; exit 1; }
-          command -v jq >/dev/null 2>&1 || { echo "ERROR: jq not found on runner"; exit 1; }
+      - name: Merge with current evidence and bounded branch recovery
+        run: python3 .github/scripts/merge_dependencies.py
 
-          if [ "${MERGE_METHOD}" != "squash" ]; then
-            echo "ERROR: this workflow only authorizes squash merges (got '${MERGE_METHOD}')."
-            exit 1
+      - name: Preserve private diagnostics with encryption
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p encrypted "$RUNNER_TEMP/dependency-private"
+          if [ -f dependency-automation-adopters.json ]; then
+            cp dependency-automation-adopters.json "$RUNNER_TEMP/dependency-private/"
           fi
+          python3 .github/scripts/private_artifacts.py pack \
+            --source "$RUNNER_TEMP/dependency-private" --destination encrypted/automerge.tar.gz.gpg
 
-          # ---- enumerate and validate repo-local adoption markers ----
-          echo "Resolving active repositories with byte-exact dependency-automation markers…"
-          adoption_result="dependency-automation-adopters.json"
-          if ! python3 .github/scripts/resolve_dependency_automation_adopters.py \
-            --organization "${ORG}" \
-            --base-policy "${AUTOMERGE_BASE_POLICY}" \
-            --effective-policy "${AUTOMERGE_POLICY}" \
-            --output "${adoption_result}"; then
-            echo "ERROR: complete marker-based repository adoption could not be proven; refusing a partial-success sweep."
-            exit 1
-          fi
-          if ! repos_raw="$(jq -r '.selected_repositories[]' "${adoption_result}")"; then
-            echo "ERROR: validated marker-adopter list could not be read."
-            exit 1
-          fi
-          if [ -z "${repos_raw}" ]; then
-            echo "ERROR: policy contains no adopted repositories."
-            exit 1
-          fi
-          mapfile -t repos <<< "${repos_raw}"
-          echo "Marker-adopted repositories with exact visible identities:"
-          for repository in "${repos[@]}"; do echo "  ${repository}"; done
-
-          echo ""
-          echo "Automerge sweep"
-          echo "  target_branch=${TARGET_BRANCH}"
-          echo "  allowed_prefixes='${ALLOWED_PREFIXES}'"
-          echo "  required_labels='${REQUIRED_LABELS}'"
-          echo "  block_labels='${BLOCK_LABELS}'"
-          echo "  merge_method=${MERGE_METHOD}"
-          echo "  delete_branch=${DELETE_BRANCH}"
-          echo "  policy=${AUTOMERGE_POLICY}"
-          echo ""
-
-          total_merged=0
-          total_refreshed=0
-          total_skipped=0
-          outcomes_file="automerge-outcomes.jsonl"
-          summary_file="automerge-summary.json"
-          : > "${outcomes_file}"
-          checkout_head="$(git rev-parse HEAD)"
-          if ! [[ "${EXPECTED_AUTHORITY_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
-            [ "${checkout_head}" != "${EXPECTED_AUTHORITY_SHA}" ]; then
-            echo "ERROR: automerge authority is malformed or not checkout-bound." >&2
-            exit 1
-          fi
-
-          record_outcome() {
-            local repository="$1" pull_request="$2" created_at="$3"
-            local outcome="$4" reason="$5" blocks_progress="$6" detail="$7"
-            local args=(
-              .github/scripts/automerge_outcomes.py record
-              --output "${outcomes_file}"
-              --repository "${repository}"
-              --pull-request "${pull_request}"
-              --created-at "${created_at}"
-              --outcome "${outcome}"
-              --reason "${reason}"
-              --detail "${detail}"
-            )
-            if [ "${blocks_progress}" = "true" ]; then
-              args+=(--blocks-progress)
-            fi
-            python3 "${args[@]}"
-          }
-
-          has_label() {
-            local labels_csv="$1"
-            local wanted="$2"
-            local labels_lc wanted_lc
-            labels_lc="$(tr '[:upper:]' '[:lower:]' <<< ",${labels_csv},")"
-            wanted_lc="$(xargs <<< "${wanted}" | tr '[:upper:]' '[:lower:]')"
-            [ -n "${wanted_lc}" ] && grep -Fq ",${wanted_lc}," <<< "${labels_lc}"
-          }
-
-          for REPO in "${repos[@]}"; do
-            echo "==== ${REPO} ===="
-
-            pr_numbers=()
-
-            echo "Listing open PRs…"
-            open_pr_pages="$(
-              gh api "repos/${REPO}/pulls?state=open&per_page=100" \
-                --paginate --slurp
-            )" || {
-              echo "ERROR: complete PR pagination failed for ${REPO}; refusing a partial-success sweep." >&2
-              exit 1
-            }
-            candidates_raw="$(jq -r \
-              '.[][] | select(.draft != true) | "\(.number)\t\(.head.ref)\t\(.base.ref)"' \
-              <<< "${open_pr_pages}")"
-
-            candidates=()
-            if [ -n "${candidates_raw}" ]; then
-              mapfile -t candidates <<< "${candidates_raw}"
-            fi
-
-            for row in "${candidates[@]}"; do
-              num="$(cut -f1 <<<"$row")"
-              head="$(cut -f2 <<<"$row")"
-              base="$(cut -f3 <<<"$row")"
-
-              [ "$base" = "$TARGET_BRANCH" ] || continue
-
-              allowed="false"
-              for p in ${ALLOWED_PREFIXES}; do
-                if [[ "$head" == "${p}"* ]]; then
-                  allowed="true"
-                  break
-                fi
-              done
-              [ "$allowed" = "true" ] || continue
-
-              pr_numbers+=("$num")
-            done
-
-            if [ "${#pr_numbers[@]}" -eq 0 ]; then
-              echo "No candidate PRs."
-              echo ""
-              continue
-            fi
-
-            echo "Candidate PRs: ${pr_numbers[*]}"
-
-            for pr in "${pr_numbers[@]}"; do
-              echo ""
-              echo "----"
-              echo "Processing ${REPO}#${pr}"
-
-              pr_json="$(gh pr view --repo "${REPO}" "${pr}" \
-                --json number,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,author,title,labels,mergeStateStatus,mergeable,createdAt,changedFiles
-              )"
-
-              state="$(jq -r '.state' <<< "${pr_json}")"
-              draft="$(jq -r '.isDraft' <<< "${pr_json}")"
-              base="$(jq -r '.baseRefName' <<< "${pr_json}")"
-              head="$(jq -r '.headRefName' <<< "${pr_json}")"
-              head_sha="$(jq -r '.headRefOid' <<< "${pr_json}")"
-              title="$(jq -r '.title' <<< "${pr_json}")"
-              labels_csv="$(jq -r '[.labels[].name] | join(",")' <<< "${pr_json}")"
-              merge_state="$(jq -r '.mergeStateStatus' <<< "${pr_json}")"
-              mergeable="$(jq -r '.mergeable' <<< "${pr_json}")"
-              created_at="$(jq -r '.createdAt' <<< "${pr_json}")"
-
-              echo "PR: ${title}"
-              echo "state=${state} draft=${draft} base=${base} head=${head} head_sha=${head_sha} labels=${labels_csv} mergeStateStatus=${merge_state} mergeable=${mergeable}"
-
-              # Basic gates
-              if [ "${state}" != "OPEN" ]; then
-                echo "Not open; skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped not_open false "state=${state}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              if [ "${draft}" = "true" ]; then
-                echo "Draft; skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped draft false "draft=true"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              if [ "${base}" != "${TARGET_BRANCH}" ]; then
-                echo "Targets '${base}', not '${TARGET_BRANCH}'; skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped wrong_base false "base=${base}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              # Head prefix allowlist (re-check here for single-PR runs too)
-              allowed="false"
-              for p in ${ALLOWED_PREFIXES}; do
-                if [[ "${head}" == "${p}"* ]]; then
-                  allowed="true"
-                  break
-                fi
-              done
-              if [ "${allowed}" != "true" ]; then
-                echo "Head branch '${head}' does not match allowed prefixes; skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped disallowed_head false "head=${head}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              # Block labels
-              IFS=',' read -r -a blocked <<< "${BLOCK_LABELS}"
-              skip_blocked="false"
-              for bl in "${blocked[@]}"; do
-                bl_trim="$(xargs <<< "${bl}")"
-                if has_label "${labels_csv}" "${bl_trim}"; then
-                  echo "Blocked by label '${bl_trim}'; skipping."
-                  skip_blocked="true"
-                  break
-                fi
-              done
-              if [ "${skip_blocked}" = "true" ]; then
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped blocked_label false "label=${bl_trim}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              # Renovate-specific gating is label-driven. Renovate emits
-              # automerge-candidate for update classes that the shared policy
-              # allows to merge after checks.
-              if [[ "${head}" == renovate/* ]]; then
-                IFS=',' read -r -a required <<< "${REQUIRED_LABELS}"
-                missing_required="false"
-                for rl in "${required[@]}"; do
-                  rl_trim="$(xargs <<< "${rl}")"
-                  if ! has_label "${labels_csv}" "${rl_trim}"; then
-                    echo "Missing required label '${rl_trim}'; skipping."
-                    missing_required="true"
-                    break
-                  fi
-                done
-                if [ "${missing_required}" = "true" ]; then
-                  record_outcome "${REPO}" "${pr}" "${created_at}" skipped missing_required_label true "label=${rl_trim}"
-                  total_skipped=$((total_skipped+1))
-                  continue
-                fi
-                echo "Required automerge labels present."
-              fi
-
-              # First prove whether this exact trusted Renovate head contains
-              # the current base. A stale branch is refreshed with an
-              # expected-head compare-and-swap, then held until a later sweep;
-              # branch refresh is never merge authorization.
-              candidate_slug="${REPO//\//-}-${pr}"
-              candidate_dir="automerge-candidates/${candidate_slug}"
-              mkdir -p "${candidate_dir}"
-              printf '%s\n' "${pr_json}" > "${candidate_dir}/pull-request.json"
-              evidence_ok="true"
-              if ! gh api \
-                "repos/${REPO}/pulls/${pr}" \
-                > "${candidate_dir}/pull-request-rest.json"; then
-                evidence_ok="false"
-              elif ! jq --slurp \
-                '.[0] + {commitCount: .[1].commits}' \
-                "${candidate_dir}/pull-request.json" \
-                "${candidate_dir}/pull-request-rest.json" \
-                > "${candidate_dir}/pull-request-with-count.json"; then
-                evidence_ok="false"
-              elif ! mv \
-                "${candidate_dir}/pull-request-with-count.json" \
-                "${candidate_dir}/pull-request.json"; then
-                evidence_ok="false"
-              elif ! gh api \
-                "repos/${REPO}/pulls/${pr}/commits?per_page=100" \
-                --paginate --slurp > "${candidate_dir}/commit-pages.json"; then
-                evidence_ok="false"
-              elif ! jq '[.[][]]' \
-                "${candidate_dir}/commit-pages.json" > "${candidate_dir}/commits.json"; then
-                evidence_ok="false"
-              elif ! gh api \
-                "repos/${REPO}/pulls/${pr}/files?per_page=100" \
-                --paginate --slurp > "${candidate_dir}/changed-file-pages.json"; then
-                evidence_ok="false"
-              elif ! jq '[.[][]]' \
-                "${candidate_dir}/changed-file-pages.json" > "${candidate_dir}/changed-files.json"; then
-                evidence_ok="false"
-              elif ! current_base_sha="$(gh api \
-                "repos/${REPO}/commits/${TARGET_BRANCH}" --jq '.sha')"; then
-                evidence_ok="false"
-              elif ! [[ "${current_base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-                evidence_ok="false"
-              elif ! gh api \
-                "repos/${REPO}/compare/${current_base_sha}...${head_sha}" \
-                > "${candidate_dir}/comparison.json"; then
-                evidence_ok="false"
-              fi
-
-              if [ "${evidence_ok}" != "true" ]; then
-                echo "Refresh evidence could not be read completely; skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped refresh_evidence_unavailable true "head_sha=${head_sha}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              risk_result="${candidate_dir}/risk-path-result.json"
-              set +e
-              python3 .github/scripts/validate_automerge_risk_paths.py \
-                --repository "${REPO}" \
-                --policy "${AUTOMERGE_RISK_PATH_POLICY}" \
-                --changed-files "${candidate_dir}/changed-files.json" \
-                --output "${risk_result}"
-              risk_status=$?
-              set -e
-              if [ "${risk_status}" -eq 3 ]; then
-                matched_paths="$(jq -r '.matched_paths | join(",")' "${risk_result}")"
-                echo "Stateful or database-owned paths require manual review; skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped stateful_path false "paths=${matched_paths}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              if [ "${risk_status}" -ne 0 ]; then
-                echo "ERROR: central risk-path policy or changed-file evidence is invalid." >&2
-                exit 1
-              fi
-
-              if ! python3 .github/scripts/validate_automerge_refresh.py \
-                --repository "${REPO}" \
-                --policy "${AUTOMERGE_POLICY}" \
-                --pull-request "${candidate_dir}/pull-request.json" \
-                --commits "${candidate_dir}/commits.json" \
-                --changed-files "${candidate_dir}/changed-files.json" \
-                --comparison "${candidate_dir}/comparison.json" \
-                --current-base-sha "${current_base_sha}" \
-                --output "${candidate_dir}/refresh-result.json"; then
-                refresh_reason="$(jq -r '.reason // "refresh_contract_failed"' "${candidate_dir}/refresh-result.json")"
-                refresh_detail="$(jq -c '{head_sha, base_sha, detail}' "${candidate_dir}/refresh-result.json")"
-                echo "Refresh contract blocked candidate: ${refresh_reason}: ${refresh_detail}"
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped "${refresh_reason}" true "${refresh_detail}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              refresh_action="$(jq -r '.action' "${candidate_dir}/refresh-result.json")"
-              if [ "${refresh_action}" = "refresh" ]; then
-                refresh_detail="$(jq -c '{head_sha, base_sha, detail}' "${candidate_dir}/refresh-result.json")"
-                echo "Refreshing exact trusted head ${head_sha} onto ${current_base_sha}; merge remains held."
-                if gh api --method PUT \
-                  "repos/${REPO}/pulls/${pr}/update-branch" \
-                  -f "expected_head_sha=${head_sha}" \
-                  -f update_method=rebase \
-                  > "${candidate_dir}/refresh-response.json"; then
-                  refresh_verified="false"
-                  for attempt in 1 2 3 4 5; do
-                    sleep 2
-                    if ! gh pr view --repo "${REPO}" "${pr}" \
-                      --json baseRefName,baseRefOid,headRefOid \
-                      > "${candidate_dir}/post-refresh-pr.json"; then
-                      continue
-                    fi
-                    post_refresh_head="$(jq -r '.headRefOid // ""' "${candidate_dir}/post-refresh-pr.json")"
-                    if ! [[ "${post_refresh_head}" =~ ^[0-9a-f]{40}$ ]] || \
-                      [ "${post_refresh_head}" = "${head_sha}" ]; then
-                      continue
-                    fi
-                    if ! post_refresh_base="$(gh api \
-                      "repos/${REPO}/commits/${TARGET_BRANCH}" --jq '.sha')"; then
-                      continue
-                    fi
-                    if ! gh api \
-                      "repos/${REPO}/compare/${post_refresh_base}...${post_refresh_head}" \
-                      > "${candidate_dir}/post-refresh-comparison.json"; then
-                      continue
-                    fi
-                    if python3 .github/scripts/validate_automerge_refresh_postcondition.py \
-                      --old-head-sha "${head_sha}" \
-                      --current-base-sha "${post_refresh_base}" \
-                      --pull-request "${candidate_dir}/post-refresh-pr.json" \
-                      --comparison "${candidate_dir}/post-refresh-comparison.json" \
-                      --output "${candidate_dir}/post-refresh-result.json"; then
-                      refresh_verified="true"
-                      break
-                    fi
-                    echo "Refresh postcondition not yet true (${attempt}/5)."
-                  done
-                  if [ "${refresh_verified}" = "true" ]; then
-                    verified_detail="$(jq -c '{old_head_sha,new_head_sha,base_sha,detail}' "${candidate_dir}/post-refresh-result.json")"
-                    record_outcome "${REPO}" "${pr}" "${created_at}" refreshed refresh_verified false "${verified_detail}"
-                    total_refreshed=$((total_refreshed+1))
-                  else
-                    record_outcome "${REPO}" "${pr}" "${created_at}" skipped branch_refresh_postcondition_unknown true "${refresh_detail}"
-                    total_skipped=$((total_skipped+1))
-                  fi
-                else
-                  record_outcome "${REPO}" "${pr}" "${created_at}" skipped branch_refresh_failed true "${refresh_detail}"
-                  total_skipped=$((total_skipped+1))
-                fi
-                continue
-              fi
-              if [ "${refresh_action}" != "continue" ]; then
-                echo "Unexpected refresh action '${refresh_action}'; refusing candidate."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped refresh_contract_invalid true "action=${refresh_action}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              # Only a current branch reaches merge validation. Any check or
-              # status that exists must be complete and successful; repositories
-              # with intentionally disabled custom CI may have no such records.
-              evidence_ok="true"
-              if ! gh api \
-                -H "Accept: application/vnd.github+json" \
-                "repos/${REPO}/commits/${head_sha}/check-runs?per_page=100" \
-                > "${candidate_dir}/checks.json"; then
-                evidence_ok="false"
-              elif ! gh api \
-                "repos/${REPO}/commits/${head_sha}/status?per_page=100" \
-                > "${candidate_dir}/statuses.json"; then
-                evidence_ok="false"
-              fi
-
-              if [ "${evidence_ok}" != "true" ]; then
-                echo "Candidate evidence could not be read completely; skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped candidate_evidence_unavailable true "head_sha=${head_sha}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              if ! python3 .github/scripts/validate_automerge_candidate.py \
-                --repository "${REPO}" \
-                --policy "${AUTOMERGE_POLICY}" \
-                --pull-request "${candidate_dir}/pull-request.json" \
-                --commits "${candidate_dir}/commits.json" \
-                --checks "${candidate_dir}/checks.json" \
-                --statuses "${candidate_dir}/statuses.json" \
-                --output "${candidate_dir}/result.json"; then
-                candidate_reason="$(jq -r '.reason // "candidate_contract_failed"' "${candidate_dir}/result.json")"
-                candidate_detail="$(jq -c '{head_sha, detail}' "${candidate_dir}/result.json")"
-                echo "Candidate contract blocked merge: ${candidate_reason}: ${candidate_detail}"
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped "${candidate_reason}" true "${candidate_detail}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              echo "Renovate identity, same-repository head, and all observed current-head checks are trusted."
-
-              # Re-fetch and revalidate the complete candidate contract at the
-              # final merge boundary. Any changed head, base, identity, labels,
-              # commits, caller, check run, or status holds this sweep. The
-              # merge call separately compare-and-swaps the exact head SHA.
-              authorized_contract="$(jq -S -c \
-                '{state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,author,labels:([.labels[].name] | sort)}' \
-                "${candidate_dir}/pull-request.json")"
-              premerge_evidence_ok="true"
-              if ! gh pr view --repo "${REPO}" "${pr}" \
-                --json state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,author,labels,mergeStateStatus,mergeable \
-                > "${candidate_dir}/premerge-pr-view.json"; then
-                premerge_evidence_ok="false"
-              elif ! gh api \
-                "repos/${REPO}/pulls/${pr}" \
-                > "${candidate_dir}/premerge-pr-rest.json"; then
-                premerge_evidence_ok="false"
-              elif ! jq --slurp \
-                '.[0] + {commitCount: .[1].commits}' \
-                "${candidate_dir}/premerge-pr-view.json" \
-                "${candidate_dir}/premerge-pr-rest.json" \
-                > "${candidate_dir}/premerge-pr.json"; then
-                premerge_evidence_ok="false"
-              elif ! gh api \
-                "repos/${REPO}/pulls/${pr}/commits?per_page=100" \
-                --paginate --slurp > "${candidate_dir}/premerge-commit-pages.json"; then
-                premerge_evidence_ok="false"
-              elif ! jq '[.[][]]' \
-                "${candidate_dir}/premerge-commit-pages.json" \
-                > "${candidate_dir}/premerge-commits.json"; then
-                premerge_evidence_ok="false"
-              elif ! latest_base_sha="$(gh api \
-                "repos/${REPO}/commits/${TARGET_BRANCH}" --jq '.sha')"; then
-                premerge_evidence_ok="false"
-              elif ! [[ "${latest_base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-                premerge_evidence_ok="false"
-              elif ! gh api \
-                -H "Accept: application/vnd.github+json" \
-                "repos/${REPO}/commits/${head_sha}/check-runs?per_page=100" \
-                > "${candidate_dir}/premerge-checks.json"; then
-                premerge_evidence_ok="false"
-              elif ! gh api \
-                "repos/${REPO}/commits/${head_sha}/status?per_page=100" \
-                > "${candidate_dir}/premerge-statuses.json"; then
-                premerge_evidence_ok="false"
-              fi
-              if [ "${premerge_evidence_ok}" != "true" ]; then
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped premerge_evidence_unavailable true "head_sha=${head_sha}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              premerge_contract="$(jq -S -c \
-                '{state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,author,labels:([.labels[].name] | sort)}' \
-                "${candidate_dir}/premerge-pr.json")"
-              if [ "${premerge_contract}" != "${authorized_contract}" ] || \
-                [ "${latest_base_sha}" != "${current_base_sha}" ]; then
-                echo "PR authorization surface or base changed after validation; holding this sweep."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped candidate_changed_since_validation true "head_sha=${head_sha} base_sha=${current_base_sha}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              if ! python3 .github/scripts/validate_automerge_candidate.py \
-                --repository "${REPO}" \
-                --policy "${AUTOMERGE_POLICY}" \
-                --pull-request "${candidate_dir}/premerge-pr.json" \
-                --commits "${candidate_dir}/premerge-commits.json" \
-                --checks "${candidate_dir}/premerge-checks.json" \
-                --statuses "${candidate_dir}/premerge-statuses.json" \
-                --output "${candidate_dir}/premerge-result.json"; then
-                premerge_reason="$(jq -r '.reason // "premerge_candidate_contract_failed"' "${candidate_dir}/premerge-result.json")"
-                premerge_detail="$(jq -c '{head_sha, detail}' "${candidate_dir}/premerge-result.json")"
-                echo "Final candidate revalidation blocked merge: ${premerge_reason}: ${premerge_detail}"
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped "${premerge_reason}" true "${premerge_detail}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              echo "Final exact-head check and status evidence is trusted."
-              merge_state="$(jq -r '.mergeStateStatus' "${candidate_dir}/premerge-pr.json")"
-              mergeable="$(jq -r '.mergeable' "${candidate_dir}/premerge-pr.json")"
-
-              # Only merge when GitHub says it's ready
-              if [ "${mergeable}" != "MERGEABLE" ]; then
-                echo "Not mergeable yet (mergeable=${mergeable}); skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped not_mergeable true "mergeable=${mergeable}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              if [ "${merge_state}" != "CLEAN" ] && [ "${merge_state}" != "HAS_HOOKS" ]; then
-                if [ "${merge_state}" = "UNSTABLE" ]; then
-                  echo "Merge state is UNSTABLE (usually failing checks). Required checks for ${REPO}#${pr}:"
-                  gh pr checks --repo "${REPO}" "${pr}" --required || true
-                fi
-                echo "Not merge-ready (mergeStateStatus=${merge_state}); skipping."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped checks_not_ready true "mergeStateStatus=${merge_state}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              # Revalidate the central automerge authority immediately before
-              # merging. A default-branch advance revokes this in-flight sweep.
-              if ! latest_org_authority_head="$(gh api \
-                "repos/${ORG}/.github/commits/${TARGET_BRANCH}" --jq '.sha')"; then
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped org_automerge_authority_unavailable true "initial_head=${EXPECTED_AUTHORITY_SHA}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              if ! [[ "${latest_org_authority_head}" =~ ^[0-9a-f]{40}$ ]]; then
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped org_automerge_authority_unavailable true "malformed_current_head"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-              if [ "${latest_org_authority_head}" != "${EXPECTED_AUTHORITY_SHA}" ]; then
-                echo "Central automerge authority advanced during this sweep; holding merge."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped org_automerge_authority_advanced true "initial_head=${EXPECTED_AUTHORITY_SHA} current_head=${latest_org_authority_head}"
-                total_skipped=$((total_skipped+1))
-                continue
-              fi
-
-              merge_args=(--squash --match-head-commit "${head_sha}")
-              if [ "${DELETE_BRANCH}" = "true" ]; then
-                merge_args+=(--delete-branch)
-              fi
-
-              echo "Attempting merge: gh pr merge --repo ${REPO} ${pr} ${merge_args[*]}"
-              if gh pr merge --repo "${REPO}" "${pr}" "${merge_args[@]}"; then
-                merge_verified="false"
-                for attempt in 1 2 3 4 5; do
-                  sleep 2
-                  if ! gh pr view --repo "${REPO}" "${pr}" \
-                    --json state,mergedAt,mergeCommit,headRefOid,baseRefName \
-                    > "${candidate_dir}/post-merge-pr.json"; then
-                    continue
-                  fi
-                  if [ "$(jq -r '.state' "${candidate_dir}/post-merge-pr.json")" != "MERGED" ]; then
-                    continue
-                  fi
-                  merge_commit_sha="$(jq -r '.mergeCommit.oid // ""' "${candidate_dir}/post-merge-pr.json")"
-                  if ! [[ "${merge_commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-                    continue
-                  fi
-                  if ! post_merge_base="$(gh api \
-                    "repos/${REPO}/commits/${TARGET_BRANCH}" --jq '.sha')"; then
-                    continue
-                  fi
-                  if ! gh api \
-                    "repos/${REPO}/commits/${merge_commit_sha}" \
-                    > "${candidate_dir}/post-merge-commit.json"; then
-                    continue
-                  fi
-                  if ! gh api \
-                    "repos/${REPO}/compare/${merge_commit_sha}...${post_merge_base}" \
-                    > "${candidate_dir}/post-merge-comparison.json"; then
-                    continue
-                  fi
-                  if python3 .github/scripts/validate_automerge_merge_postcondition.py \
-                    --authorized-head-sha "${head_sha}" \
-                    --authorized-base-sha "${current_base_sha}" \
-                    --current-base-sha "${post_merge_base}" \
-                    --pull-request "${candidate_dir}/post-merge-pr.json" \
-                    --merge-commit "${candidate_dir}/post-merge-commit.json" \
-                    --comparison "${candidate_dir}/post-merge-comparison.json" \
-                    --output "${candidate_dir}/post-merge-result.json"; then
-                    merge_verified="true"
-                    break
-                  fi
-                  echo "Merge postcondition not yet true (${attempt}/5)."
-                done
-                if [ "${merge_verified}" = "true" ]; then
-                  echo "Merge postcondition verified."
-                  verified_detail="$(jq -c '{head_sha,merge_commit_sha,base_sha,detail}' "${candidate_dir}/post-merge-result.json")"
-                  record_outcome "${REPO}" "${pr}" "${created_at}" merged merge_verified false "${verified_detail}"
-                  total_merged=$((total_merged+1))
-                else
-                  echo "Merge request returned success, but merged state is not proven."
-                  record_outcome "${REPO}" "${pr}" "${created_at}" skipped merge_postcondition_unknown true "head_sha=${head_sha} method=${MERGE_METHOD}"
-                  total_skipped=$((total_skipped+1))
-                fi
-              else
-                echo "Merge failed (likely blocked by protections/checks). Current required checks:"
-                gh pr checks --repo "${REPO}" "${pr}" --required || true
-                echo "Will retry on next sweep."
-                record_outcome "${REPO}" "${pr}" "${created_at}" skipped merge_failed true "method=${MERGE_METHOD}"
-                total_skipped=$((total_skipped+1))
-              fi
-            done
-
-            echo ""
-          done
-
-          echo "==== Summary ===="
-          echo "  merged=${total_merged}"
-          echo "  refreshed=${total_refreshed}"
-          echo "  skipped=${total_skipped}"
-
-          python3 .github/scripts/automerge_outcomes.py summarize \
-            --input "${outcomes_file}" \
-            --output "${summary_file}" \
-            --degrade-after-hours 24
-
-          {
-            echo "## Automerge outcome contract"
-            echo '```json'
-            cat "${summary_file}"
-            echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Upload automerge outcome evidence
+      - name: Publish aggregate outcome summary
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: automerge-outcomes
-          path: |
-            dependency-automation-adopters.json
-            automerge-effective-policy.json
-            automerge-outcomes.jsonl
-            automerge-summary.json
-            automerge-candidates/
-          if-no-files-found: error
+          name: automerge-summary
+          path: automerge-summary.json
+          if-no-files-found: warn
           retention-days: 14
 
-      - name: Enforce actionable-backlog health
-        if: always()
+      - name: Preserve encrypted outcome evidence
+        if: always() && hashFiles('encrypted/automerge.tar.gz.gpg') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: automerge-diagnostics-encrypted
+          path: encrypted/automerge.tar.gz.gpg
+          retention-days: 7
+
+      - name: Request one targeted Renovate recovery
+        if: ${{ !cancelled() && (inputs.allowRecovery == null || inputs.allowRecovery) }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -s automerge-summary.json ]; then
-            echo "Automerge summary is missing." >&2
-            exit 1
-          fi
-          if ! jq -e '.schema_version == 1 and .degraded == false' automerge-summary.json >/dev/null; then
-            echo "Automerge still has aged actionable skips; successful work does not hide them." >&2
-            cat automerge-summary.json >&2
-            exit 1
-          fi
+          recovery="$RUNNER_TEMP/dependency-private/recovery-repositories.json"
+          if [ ! -f "$recovery" ]; then exit 0; fi
+          repositories="$(jq -r 'join(",")' "$recovery")"
+          if [ -z "$repositories" ]; then exit 0; fi
+          current_authority_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          test "$current_authority_sha" = "$GITHUB_SHA"
+          gh workflow run renovate.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f "repositories=$repositories" -f recovery=true

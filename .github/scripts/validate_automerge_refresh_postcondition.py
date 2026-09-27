@@ -40,6 +40,7 @@ def evaluate_refresh_postcondition(
     current_base_sha: str,
     pull_request: dict[str, Any],
     comparison: dict[str, Any],
+    default_branch: str = "main",
 ) -> dict[str, Any]:
     if SHA_RE.fullmatch(old_head_sha) is None or SHA_RE.fullmatch(current_base_sha) is None:
         return evaluation(
@@ -69,7 +70,7 @@ def evaluate_refresh_postcondition(
             new_head_sha=new_head_sha,
             base_sha=current_base_sha,
         )
-    if pull_request.get("baseRefName") != "main" or recorded_base_sha != current_base_sha:
+    if pull_request.get("baseRefName") != default_branch or recorded_base_sha != current_base_sha:
         return evaluation(
             False,
             "refreshed_base_mismatch",

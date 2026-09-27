@@ -204,6 +204,7 @@ class AdoptionSelectionTests(unittest.TestCase):
                     "repository": "FutureDevGuys/new",
                     "repository_id": 7,
                     "head_repository_id": "R_new",
+                    "default_branch": "trunk",
                 }
             ]
         }
@@ -214,6 +215,7 @@ class AdoptionSelectionTests(unittest.TestCase):
                 "repository_id": 7,
                 "head_repository_id": "R_new",
                 "required_checks": [],
+                "default_branch": "trunk",
             },
         )
         base["repositories"]["FutureDevGuys/new"] = {
