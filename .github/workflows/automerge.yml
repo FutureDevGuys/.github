@@ -60,7 +60,7 @@ jobs:
 
       - name: Publish aggregate outcome summary
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: automerge-summary
           path: automerge-summary.json
@@ -69,7 +69,7 @@ jobs:
 
       - name: Preserve encrypted outcome evidence
         if: always() && hashFiles('encrypted/automerge.tar.gz.gpg') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: automerge-diagnostics-encrypted
           path: encrypted/automerge.tar.gz.gpg
