@@ -6,6 +6,14 @@
 
 The [repository README](../README.md#renovate) owns the shared dependency-automation workflow, current scheduling, encrypted cache/diagnostics, signing, and human approval interface. Native Renovate extraction and generic classification apply to every adopter. Repositories own optional package rules and hash-verified post-upgrade tasks in their own `renovate.json`; the central runner does not maintain workload path lists or script-version inventories.
 
+### Optional Docker image compatibility
+
+The shared `docker-image-compat.json` preset is callable from any repository with `extends: ["github>FutureDevGuys/.github:docker-image-compat#<SHA>"]`, replacing `<SHA>` with its reviewed 40-character central commit. Existing adopters retain their defaults until they opt in; this preset does not enroll a repository or create a runner.
+
+The preset compares IT-Tools calendar tags by their date and preserves the publisher's full commit-hash tag. Different hashes on the same date do not establish release order. It also permits Docker GHCR patch/minor proposals when the registry supplies no publication timestamp, and adds `manual-review` to every matching proposal. A known timestamp still uses the inherited cooldown. This does not change Docker Hub, digest or major-update policy; repositories retain their own workload approvals and longer cooldowns. The central merge owner still requires current-head maintainer approval for the review label.
+
+Before choosing a tag, compare the publisher's documented scheme against Docker versioning's numeric precision and compatibility suffix. Keep real OS/flavor/architecture boundaries and immutable digests; prefer a documented application tag when an incidental suffix freezes future releases. Put reusable publisher/registry parsing rules in the shared preset, and workload paths, migration policy and hash-verified owner tasks in the consumer. Confirm actual extraction and the Dependency Dashboard/proposal status; a schema-valid configuration alone does not establish that an update is available or eligible.
+
 ### `security-scan.yml`
 
 Trivy filesystem scan — checks for vulnerabilities, misconfigurations, secrets, and license issues at HIGH+CRITICAL severity (ignoring unfixed).

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Opt-in Docker image compatibility rules; missing GHCR release ages require manual review.",
+  "packageRules": [
+    {
+      "description": "Compare IT-Tools calendar release tags without treating the commit hash as a compatibility suffix.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/corentinth/it-tools"
+      ],
+      "versioning": "regex:^(?<major>\\d{4})\\.(?<minor>\\d{1,2})\\.(?<patch>\\d{1,2})-[a-f0-9]{7,40}$",
+      "matchCurrentValue": "/^\\d{4}\\.\\d{1,2}\\.\\d{1,2}-[a-f0-9]{7,40}$/"
+    },
+    {
+      "description": "Permit GHCR patch and minor proposals when publication timestamps are unavailable, with explicit maintainer review.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "/^ghcr\\.io\\//"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional",
+      "automerge": false,
+      "addLabels": [
+        "manual-review"
+      ]
+    }
+  ]
+}
