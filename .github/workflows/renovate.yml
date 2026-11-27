@@ -35,7 +35,7 @@ permissions:
 
 env:
   # renovate: datasource=docker depName=renovate/renovate
-  RENOVATE_IMAGE: renovate/renovate:44.14.7@sha256:64775eb3b7fc6822f6877bfd43d39eb4af6e3334c116160852704da2c219fe81
+  RENOVATE_IMAGE: renovate/renovate:45.3.2@sha256:d0358088501c7665688673c8932474b02517941703a16e970e8b4fcf235299cb
 
 jobs:
   renovate:
